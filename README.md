@@ -12,13 +12,13 @@ Client App  →  POST /notify  →  API Layer  →  BullMQ Queues  →  Workers 
 
 ### Channels
 
-| Channel  | Provider    | Concurrency | Retries |
-| -------- | ----------- | ----------- | ------- |
-| Push     | OneSignal   | 10          | 3       |
-| Email    | OneSignal   | 5           | 3       |
-| SMS      | OneSignal   | 5           | 5       |
-| WhatsApp | MSG91       | 5           | 5       |
-| In-App   | DB (direct) | 20          | 2       |
+| Channel  | Provider         | Concurrency | Retries |
+| -------- | ---------------- | ----------- | ------- |
+| Push     | OneSignal        | 10          | 3       |
+| Email    | OneSignal        | 5           | 3       |
+| SMS      | OneSignal        | 5           | 5       |
+| WhatsApp | WAHA (self-host) | 5           | 5       |
+| In-App   | DB (direct)      | 20          | 2       |
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ Client App  →  POST /notify  →  API Layer  →  BullMQ Queues  →  Workers 
 - Redis (local or Railway Redis plugin)
 - Neon database (free tier works)
 - OneSignal account
-- MSG91 account (for WhatsApp)
+- WAHA Docker container (for WhatsApp — self-hosted)
 
 ### 2. Install
 
@@ -100,7 +100,8 @@ Headers: x-api-key: <your-api-key>
 Body: {
   "user_id": "user_123",
   "type": "fee_due",
-  "channels": ["push", "email", "inapp"],
+  "channels": ["push", "email", "whatsapp", "inapp"],
+  "entity_id": "coaching_center_1",
   "variables": {
     "student_name": "Rahul",
     "amount": "₹5,000"
@@ -117,9 +118,11 @@ Body: {
 Response (202): {
   "success": true,
   "notification_id": "uuid",
-  "channels_enqueued": ["push", "email", "inapp"]
+  "channels_enqueued": ["push", "email", "whatsapp", "inapp"]
 }
 ```
+
+> **Note:** `entity_id` is required when `whatsapp` is in `channels`. If missing, WhatsApp is silently skipped.
 
 ### Get User Notifications (Bell Icon)
 
@@ -149,6 +152,37 @@ GET /notifications/:notificationId/logs
 Headers: x-api-key: <your-api-key>
 ```
 
+### WhatsApp Session Management
+
+**Create Session** — returns a QR code for scanning
+
+```
+POST /whatsapp/sessions
+Headers: x-api-key: <your-api-key>
+Body: { "entity_id": "coaching_center_1" }
+Response (201): { "success": true, "session": "...", "status": "pending", "qr_code": "data:image/..." }
+```
+
+**Get Session Status**
+
+```
+GET /whatsapp/sessions/:entity_id
+Headers: x-api-key: <your-api-key>
+```
+
+**Delete / Logout Session**
+
+```
+DELETE /whatsapp/sessions/:entity_id
+Headers: x-api-key: <your-api-key>
+```
+
+**Webhook** (called by WAHA — no auth header required)
+
+```
+POST /whatsapp/sessions/webhook?secret=<WAHA_WEBHOOK_SECRET>
+```
+
 ## Swapping Providers
 
 1. Create a new provider extending `INotificationProvider`
@@ -169,7 +203,7 @@ Headers: x-api-key: <your-api-key>
 ```
 src/
 ├── api/
-│   ├── routes/         → notify, notifications, templates, health, apps
+│   ├── routes/         → notify, notifications, templates, health, apps, whatsapp-sessions
 │   └── middlewares/     → auth (api_key validation)
 ├── queues/
 │   ├── connection.js   → shared Redis/ioredis connection
@@ -180,19 +214,20 @@ src/
 │   ├── push.worker.js
 │   ├── email.worker.js
 │   ├── sms.worker.js
-│   ├── whatsapp.worker.js
+│   ├── whatsapp.worker.js → custom: session lookup → WAHA send
 │   └── inapp.worker.js
 ├── providers/
 │   ├── interface.js    → INotificationProvider base class
 │   ├── registry.js     → channel → provider mapping
 │   ├── bootstrap.js    → wire up providers at startup
 │   ├── onesignal.provider.js
-│   ├── msg91.provider.js
+│   ├── waha.provider.js → WAHA WhatsApp provider
 │   └── inapp.provider.js
 ├── db/
 │   ├── index.js        → Neon connection
-│   ├── schema.sql      → DDL
-│   └── migrate.js      → run migrations
+│   ├── schema.sql      → DDL (includes whatsapp_sessions)
+│   ├── migrate.js      → run migrations
+│   └── migrations/     → incremental SQL migration files
 ├── utils/
 │   └── template.js     → {{variable}} rendering
 ├── config/

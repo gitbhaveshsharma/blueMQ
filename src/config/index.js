@@ -19,11 +19,15 @@ const config = {
     apiKey: process.env.ONESIGNAL_API_KEY,
   },
 
-  // ─── MSG91 ───
-  msg91: {
-    authKey: process.env.MSG91_AUTH_KEY,
-    whatsappNumber: process.env.MSG91_WHATSAPP_NUMBER,
+  // ─── WAHA (WhatsApp — self-hosted via Railway private network) ───
+  waha: {
+    baseUrl: process.env.WAHA_BASE_URL || "http://localhost:3000",
+    apiKey: process.env.WAHA_API_KEY || "",
+    webhookSecret: process.env.WAHA_WEBHOOK_SECRET || "",
   },
+
+  // ─── Base URL (for webhook configs) ───
+  baseUrl: process.env.BASE_URL || "http://localhost:3001",
 
   // ─── Service Auth ───
   serviceApiKeySecret: process.env.SERVICE_API_KEY_SECRET || "dev-secret",

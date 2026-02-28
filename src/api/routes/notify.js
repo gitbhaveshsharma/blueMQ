@@ -35,8 +35,16 @@ const VALID_CHANNELS = ["push", "email", "sms", "whatsapp", "inapp"];
  */
 router.post("/", async (req, res) => {
   try {
-    const { user_id, type, channels, variables, user, action_url, data } =
-      req.body;
+    const {
+      user_id,
+      type,
+      channels,
+      variables,
+      user,
+      action_url,
+      data,
+      entity_id,
+    } = req.body;
     const appId = req.appId;
 
     // ─── 1. Validate ───
@@ -59,6 +67,20 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // If whatsapp requested but entity_id missing — warn and drop whatsapp
+    let effectiveChannels = [...channels];
+    if (channels.includes("whatsapp") && !entity_id) {
+      console.warn(
+        `[notify] ⚠ WhatsApp requested but entity_id missing — skipping whatsapp for user ${user_id}`,
+      );
+      effectiveChannels = effectiveChannels.filter((c) => c !== "whatsapp");
+      if (effectiveChannels.length === 0) {
+        return res.status(400).json({
+          error: "entity_id is required when the only channel is whatsapp",
+        });
+      }
+    }
+
     if (!user || typeof user !== "object") {
       return res
         .status(400)
@@ -73,7 +95,7 @@ router.post("/", async (req, res) => {
       FROM templates
       WHERE app_id = ${appId}
         AND type = ${type}
-        AND channel = ANY(${channels})
+        AND channel = ANY(${effectiveChannels})
         AND is_active = true
     `;
 
@@ -89,7 +111,7 @@ router.post("/", async (req, res) => {
 
     // For channels without a template, build a fallback from variables or type
     const resolvedChannels = [];
-    for (const ch of channels) {
+    for (const ch of effectiveChannels) {
       if (!templateMap[ch]) {
         // Use a generic template
         templateMap[ch] = {
@@ -104,7 +126,7 @@ router.post("/", async (req, res) => {
 
     // ─── 3. Save notification to DB ───
     // Use the first available template for the master record
-    const primaryTemplate = templateMap[channels[0]];
+    const primaryTemplate = templateMap[effectiveChannels[0]];
     const notificationId = uuidv4();
 
     await sql`
@@ -127,6 +149,7 @@ router.post("/", async (req, res) => {
       actionUrl: action_url,
       data,
       channels: resolvedChannels,
+      entityId: entity_id,
     });
 
     // ─── 5. Return immediately ───

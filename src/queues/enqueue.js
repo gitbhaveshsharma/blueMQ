@@ -29,6 +29,7 @@ async function enqueueNotification(opts) {
     actionUrl,
     data,
     channels,
+    entityId,
   } = opts;
 
   const jobPayload = {
@@ -42,6 +43,7 @@ async function enqueueNotification(opts) {
     user,
     actionUrl,
     data,
+    entityId,
   };
 
   const enqueued = [];

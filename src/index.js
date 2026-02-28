@@ -16,6 +16,7 @@ const appsRoutes = require("./api/routes/apps");
 const notifyRoutes = require("./api/routes/notify");
 const notificationsRoutes = require("./api/routes/notifications");
 const templatesRoutes = require("./api/routes/templates");
+const whatsappSessionsRoutes = require("./api/routes/whatsapp-sessions");
 
 async function main() {
   console.log("═══════════════════════════════════════════");
@@ -50,6 +51,7 @@ async function main() {
   app.use("/notify", authMiddleware, notifyRoutes);
   app.use("/notifications", authMiddleware, notificationsRoutes);
   app.use("/templates", authMiddleware, templatesRoutes);
+  app.use("/whatsapp", authMiddleware, whatsappSessionsRoutes);
 
   // ─── 404 ───
   app.use((_req, res) => {

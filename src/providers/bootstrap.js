@@ -10,25 +10,25 @@
 
 const { registry } = require("./registry");
 const { OneSignalProvider } = require("./onesignal.provider");
-const { MSG91Provider } = require("./msg91.provider");
+const { WahaProvider } = require("./waha.provider");
 const { InAppProvider } = require("./inapp.provider");
 
 function bootstrapProviders() {
   const onesignal = new OneSignalProvider();
-  const msg91 = new MSG91Provider();
+  const waha = new WahaProvider();
   const inapp = new InAppProvider();
 
   // ─── Primary Providers ───
   registry.register("push", onesignal);
   registry.register("email", onesignal);
   registry.register("sms", onesignal);
-  registry.register("whatsapp", msg91);
+  registry.register("whatsapp", waha);
   registry.register("inapp", inapp);
 
   // ─── Fallbacks (uncomment when ready) ───
   // registry.registerFallback('push',  new FCMProvider());
   // registry.registerFallback('email', new SendGridProvider());
-  // registry.registerFallback('sms',   msg91);
+  // registry.registerFallback('sms',   new MSG91Provider());
 
   console.log(
     "[providers] Registry initialised:",
