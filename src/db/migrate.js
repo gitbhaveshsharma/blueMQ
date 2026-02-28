@@ -11,8 +11,19 @@ async function migrate() {
   const schemaPath = path.join(__dirname, "schema.sql");
   const schemaSql = fs.readFileSync(schemaPath, "utf-8");
 
-  console.log("[migrate] Running schema migration...");
-  await sql.query(schemaSql);
+  // Neon serverless does not support multi-statement queries in one call.
+  // Split on semicolons, strip blank/comment-only lines, run each statement.
+  const statements = schemaSql
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && !s.startsWith("--"));
+
+  console.log(
+    `[migrate] Running schema migration (${statements.length} statements)...`,
+  );
+  for (const statement of statements) {
+    await sql.query(statement + ";");
+  }
   console.log("[migrate] Schema migration complete.");
 }
 

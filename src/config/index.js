@@ -63,11 +63,11 @@ const config = {
 
   // ─── Queue Names ───
   queues: {
-    push: "notifications:push",
-    email: "notifications:email",
-    sms: "notifications:sms",
-    whatsapp: "notifications:whatsapp",
-    inapp: "notifications:inapp",
+    push: "notifications-push",
+    email: "notifications-email",
+    sms: "notifications-sms",
+    whatsapp: "notifications-whatsapp",
+    inapp: "notifications-inapp",
   },
 };
 
