@@ -12,7 +12,7 @@ async function migrate() {
   const schemaSql = fs.readFileSync(schemaPath, "utf-8");
 
   console.log("[migrate] Running schema migration...");
-  await sql(schemaSql);
+  await sql.query(schemaSql);
   console.log("[migrate] Schema migration complete.");
 }
 
