@@ -12,11 +12,20 @@ async function migrate() {
   const schemaSql = fs.readFileSync(schemaPath, "utf-8");
 
   // Neon serverless does not support multi-statement queries in one call.
-  // Split on semicolons, strip blank/comment-only lines, run each statement.
+  // Split on semicolons, strip leading comment-only lines from each statement,
+  // then run each non-empty statement.
   const statements = schemaSql
     .split(";")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !s.startsWith("--"));
+    .map((s) => {
+      // Remove lines that are pure SQL comments (start with --)
+      const stripped = s
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("--"))
+        .join("\n")
+        .trim();
+      return stripped;
+    })
+    .filter((s) => s.length > 0);
 
   console.log(
     `[migrate] Running schema migration (${statements.length} statements)...`,

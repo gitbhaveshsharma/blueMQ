@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 const { getDb } = require("../../db");
 const config = require("../../config");
+const { authMiddleware } = require("../middlewares/auth");
 
 const router = Router();
 
@@ -43,6 +44,33 @@ router.post("/register", async (req, res) => {
     return res.status(201).json({ success: true, app_id, api_key: apiKey });
   } catch (err) {
     console.error("[apps] register error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /apps/me
+ *
+ * Returns the profile of the currently authenticated app.
+ * Protected by x-api-key (authMiddleware).
+ */
+router.get("/me", authMiddleware, async (req, res) => {
+  try {
+    const sql = getDb();
+    const rows = await sql`
+      SELECT id, app_id, name, email, created_at
+      FROM apps
+      WHERE app_id = ${req.appId}
+      LIMIT 1
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "App not found" });
+    }
+
+    return res.json(rows[0]);
+  } catch (err) {
+    console.error("[apps] me error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });

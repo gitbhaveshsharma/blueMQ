@@ -17,6 +17,7 @@ const notifyRoutes = require("./api/routes/notify");
 const notificationsRoutes = require("./api/routes/notifications");
 const templatesRoutes = require("./api/routes/templates");
 const whatsappSessionsRoutes = require("./api/routes/whatsapp-sessions");
+const authRoutes = require("./api/routes/auth");
 
 async function main() {
   console.log("═══════════════════════════════════════════");
@@ -46,6 +47,7 @@ async function main() {
   // ─── Public routes (no auth) ───
   app.use("/health", healthRoutes);
   app.use("/apps", appsRoutes);
+  app.use("/auth", authRoutes);
 
   // ─── Protected routes (require x-api-key) ───
   app.use("/notify", authMiddleware, notifyRoutes);

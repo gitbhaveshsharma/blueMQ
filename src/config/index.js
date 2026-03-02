@@ -26,10 +26,17 @@ const config = {
     webhookSecret: process.env.WAHA_WEBHOOK_SECRET || "",
   },
 
+  // ─── Resend (OTP emails) ───
+  resend: {
+    apiKey: process.env.RESEND_API_KEY || "",
+    fromEmail:
+      process.env.RESEND_FROM_EMAIL || "BlueMQ <onboarding@resend.dev>",
+  },
+
   // ─── Base URL (for webhook configs) ───
   baseUrl: process.env.BASE_URL || "http://localhost:3001",
 
-  // ─── Service Auth ───
+  // ─── Service Auth (internal only — never expose to clients) ───
   serviceApiKeySecret: process.env.SERVICE_API_KEY_SECRET || "dev-secret",
 
   // ─── Worker Concurrency ───

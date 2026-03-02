@@ -7,9 +7,26 @@ CREATE TABLE IF NOT EXISTS apps (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_id      VARCHAR(64) NOT NULL UNIQUE,
   name        VARCHAR(255) NOT NULL,
+  email       VARCHAR(255),
   api_key     VARCHAR(255) NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 1b. OTP codes for email-based auth
+CREATE TABLE IF NOT EXISTS otps (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email       VARCHAR(255) NOT NULL,
+  code        VARCHAR(6)   NOT NULL,
+  purpose     VARCHAR(32)  NOT NULL,
+  app_id      VARCHAR(64),
+  app_name    VARCHAR(255),
+  expires_at  TIMESTAMPTZ  NOT NULL,
+  verified    BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_otps_email_purpose
+  ON otps (email, purpose, created_at DESC);
 
 -- 2. Templates
 CREATE TABLE IF NOT EXISTS templates (
