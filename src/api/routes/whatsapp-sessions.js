@@ -20,22 +20,66 @@ const WAHA_SESSION = "default";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Get the current WAHA session state by listing all sessions.
+ * Get the current WAHA session state.
+ * Tries GET /api/sessions (list) first, then GET /api/sessions/:name as fallback.
  * Returns status string (STARTING, SCAN_QR_CODE, WORKING, STOPPED, FAILED)
  * or "NOT_FOUND" / null (unreachable).
  */
 async function getWahaSessionState(sessionName) {
+  // Method 1: List all sessions
   try {
     const res = await axios.get(`${WAHA_BASE}/api/sessions`, {
       headers: WAHA_HEADERS,
       timeout: 10000,
     });
-    const sessions = Array.isArray(res.data) ? res.data : [];
-    const found = sessions.find((s) => s.name === sessionName);
-    return found ? found.status || "UNKNOWN" : "NOT_FOUND";
-  } catch {
-    return null; // WAHA unreachable
+    const data = res.data;
+    const sessions = Array.isArray(data) ? data : [];
+
+    // Debug: log what WAHA actually returns (first call only)
+    if (!getWahaSessionState._logged) {
+      console.log(
+        `[waha-debug] GET /api/sessions response (type=${typeof data}, isArray=${Array.isArray(data)}, length=${sessions.length}):`,
+        JSON.stringify(data).slice(0, 500),
+      );
+      getWahaSessionState._logged = true;
+    }
+
+    // Try multiple property names — WAHA versions differ
+    const found = sessions.find(
+      (s) =>
+        s.name === sessionName ||
+        s.session === sessionName ||
+        s.id === sessionName,
+    );
+    if (found) {
+      const status = found.status || found.state || "UNKNOWN";
+      return status;
+    }
+  } catch (err) {
+    console.warn(
+      `[waha-debug] GET /api/sessions failed: ${err.response?.status || err.message}`,
+    );
   }
+
+  // Method 2: Direct session endpoint (works in some WAHA versions)
+  try {
+    const res = await axios.get(`${WAHA_BASE}/api/sessions/${sessionName}`, {
+      headers: WAHA_HEADERS,
+      timeout: 10000,
+    });
+    const status = res.data?.status || res.data?.state || null;
+    if (status) {
+      console.log(`[waha-debug] GET /api/sessions/${sessionName} → ${status}`);
+      return status;
+    }
+  } catch (err) {
+    if (err.response?.status === 404) {
+      return "NOT_FOUND";
+    }
+    // Other errors — WAHA may be unreachable
+  }
+
+  return "NOT_FOUND";
 }
 
 /**
@@ -100,7 +144,7 @@ router.post("/sessions", async (req, res) => {
     if (currentState === "NOT_FOUND" || !currentState) {
       // Session doesn't exist — create it
       try {
-        await axios.post(
+        const createRes = await axios.post(
           `${WAHA_BASE}/api/sessions`,
           {
             name: sessionName,
@@ -111,7 +155,8 @@ router.post("/sessions", async (req, res) => {
           { headers: WAHA_HEADERS, timeout: 15000 },
         );
         console.log(
-          `[whatsapp-sessions] Created WAHA session '${sessionName}'`,
+          `[whatsapp-sessions] Created WAHA session '${sessionName}' — response:`,
+          JSON.stringify(createRes.data).slice(0, 500),
         );
       } catch (err) {
         if (err.response?.status !== 422) {
@@ -172,29 +217,72 @@ router.post("/sessions", async (req, res) => {
 
     // ── Step 2: Poll state until SCAN_QR_CODE, then fetch QR (up to 30 s) ──
     let qrCode = null;
+    let consecutiveNotFound = 0;
+
     for (let attempt = 1; attempt <= 15; attempt++) {
       await sleep(2000);
 
       const state = await getWahaSessionState(sessionName);
-      console.log(`[whatsapp-sessions] Poll ${attempt}/15: state=${state}`);
+
+      // Also try fetching QR directly — some WAHA versions don't list
+      // sessions correctly but still serve the QR endpoint
+      const directQr = await fetchQrCode(sessionName);
+
+      console.log(
+        `[whatsapp-sessions] Poll ${attempt}/15: state=${state}, qr=${directQr ? `yes(${String(directQr).length}ch)` : "no"}`,
+      );
+
+      if (directQr) {
+        qrCode = directQr;
+        console.log(
+          `[whatsapp-sessions] ✅ QR obtained on attempt ${attempt} (${String(qrCode).length} chars)`,
+        );
+        break;
+      }
+
+      if (state === "NOT_FOUND") {
+        consecutiveNotFound++;
+        // If session vanished after 5 consecutive NOT_FOUND, try recreating
+        if (consecutiveNotFound === 5) {
+          console.warn(
+            `[whatsapp-sessions] Session stuck as NOT_FOUND, retrying create…`,
+          );
+          try {
+            await axios.post(
+              `${WAHA_BASE}/api/sessions`,
+              { name: sessionName, start: true },
+              { headers: WAHA_HEADERS, timeout: 15000 },
+            );
+            console.log(`[whatsapp-sessions] Re-created session`);
+          } catch {
+            // Try start endpoint
+            try {
+              await axios.post(
+                `${WAHA_BASE}/api/sessions/${sessionName}/start`,
+                {},
+                { headers: WAHA_HEADERS, timeout: 15000 },
+              );
+              console.log(`[whatsapp-sessions] Started session explicitly`);
+            } catch {
+              /* keep polling */
+            }
+          }
+        }
+      } else {
+        consecutiveNotFound = 0;
+      }
 
       if (state === "SCAN_QR_CODE") {
-        qrCode = await fetchQrCode(sessionName);
-        if (qrCode) {
-          console.log(
-            `[whatsapp-sessions] ✅ QR obtained on attempt ${attempt} (${String(qrCode).length} chars)`,
-          );
-          break;
-        }
+        // State correct but QR fetch failed — retry
+        continue;
       } else if (state === "WORKING") {
-        // Already authenticated — no QR needed
         console.log(`[whatsapp-sessions] Session already authenticated`);
         break;
       } else if (state === "FAILED") {
         console.error(`[whatsapp-sessions] Session FAILED, giving up`);
         break;
       }
-      // STARTING or null — keep waiting
+      // STARTING / NOT_FOUND / null — keep waiting
     }
 
     // ── Step 3: Upsert into our DB ──
@@ -266,12 +354,12 @@ router.get("/sessions/:entity_id", async (req, res) => {
     if (session.status === "pending") {
       const wahaState = await getWahaSessionState(session.waha_session);
 
-      if (wahaState === "SCAN_QR_CODE") {
-        // QR should be available
-        const freshQr = await fetchQrCode(session.waha_session);
+      // Always try to get QR directly regardless of state
+      const freshQr = await fetchQrCode(session.waha_session);
+
+      if (wahaState === "SCAN_QR_CODE" || freshQr) {
         if (freshQr) {
           result.qr_code = freshQr;
-          // Cache it in DB for next poll
           await sql`
             UPDATE whatsapp_sessions SET qr_code = ${freshQr}
             WHERE app_id = ${appId} AND entity_id = ${entity_id}
