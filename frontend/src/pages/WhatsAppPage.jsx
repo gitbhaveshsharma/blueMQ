@@ -24,13 +24,29 @@ function parseQrCode(raw) {
 }
 
 export default function WhatsAppPage() {
-  const [entityId, setEntityId] = useState('');
+  const [entityId, setEntityId] = useState(() => localStorage.getItem('wa_entity_id') || '');
   const [entityName, setEntityName] = useState('');
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [testPhone, setTestPhone] = useState('');
+  const [testMessage, setTestMessage] = useState('');
+  const [sending, setSending] = useState(false);
   const pollRef = useRef(null);
+
+  // Persist entityId to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('wa_entity_id', entityId);
+  }, [entityId]);
+
+  // Auto-load session on mount if we have a saved entityId
+  useEffect(() => {
+    const saved = localStorage.getItem('wa_entity_id');
+    if (saved) {
+      api.getWhatsAppSession(saved).then(setSession).catch(() => {});
+    }
+  }, []);
 
   // Auto-poll every 5 s while status is pending
   useEffect(() => {
@@ -81,7 +97,7 @@ export default function WhatsAppPage() {
         entityName.trim() || undefined
       );
       setSession(data);
-      toast.success('Session created â€” scan the QR code below');
+      toast.success('Session created — scan the QR code below');
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -99,6 +115,28 @@ export default function WhatsAppPage() {
       toast.error(err.message);
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function handleSendTest() {
+    if (!testPhone.trim()) {
+      toast.error('Enter a phone number to send the test to');
+      return;
+    }
+    const digitsOnly = testPhone.trim().replace(/[^\d]/g, '');
+    if (digitsOnly.length < 7 || digitsOnly.length > 15) {
+      toast.error('Phone must be 7–15 digits in international format (e.g. 919876543210)');
+      return;
+    }
+    setSending(true);
+    try {
+      await api.sendWhatsAppTestMessage(entityId.trim(), digitsOnly, testMessage.trim() || undefined);
+      toast.success(`Test message sent to +${digitsOnly}!`);
+      setTestMessage('');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSending(false);
     }
   }
 
@@ -208,7 +246,7 @@ export default function WhatsAppPage() {
             </button>
           </div>
 
-          {/* QR code panel â€” shown when pending */}
+          {/* QR code panel — shown when pending */}
           {session.status === 'pending' && (
             <div className="p-6">
               {qrValue ? (
@@ -218,7 +256,7 @@ export default function WhatsAppPage() {
                     <p className="mb-1 text-sm font-semibold text-blue-800">How to scan</p>
                     <ol className="space-y-0.5 text-xs text-blue-700 list-decimal list-inside">
                       <li>Open WhatsApp on your phone</li>
-                      <li>Tap <strong>Linked Devices</strong> â†’ <strong>Link a Device</strong></li>
+                      <li>Tap <strong>Linked Devices</strong> → <strong>Link a Device</strong></li>
                       <li>Point your camera at the QR code below</li>
                     </ol>
                   </div>
@@ -226,17 +264,22 @@ export default function WhatsAppPage() {
                   {/* QR code */}
                   <div className="rounded-2xl bg-white p-5 shadow-md border border-gray-100">
                     {qrValue.startsWith('data:image') ? (
+                      // Already a data-URI image (PNG/SVG) — render directly
                       <img src={qrValue} alt="WhatsApp QR Code" className="h-56 w-56" />
+                    ) : qrValue.length > 500 ? (
+                      // Long bare-base64 string — WAHA omitted the data-URI prefix
+                      <img
+                        src={`data:image/png;base64,${qrValue}`}
+                        alt="WhatsApp QR Code"
+                        className="h-56 w-56"
+                      />
                     ) : (
+                      // Short raw QR payload — let the library encode it
                       <QRCodeSVG
                         value={qrValue}
                         size={224}
                         level="M"
                         includeMargin={false}
-                        imageSettings={{
-                          src: '',
-                          excavate: false,
-                        }}
                       />
                     )}
                   </div>
@@ -245,7 +288,7 @@ export default function WhatsAppPage() {
                   <div className="flex items-center justify-between w-full rounded-lg bg-gray-50 border border-gray-100 px-4 py-2.5">
                     <div className="flex items-center gap-2 text-xs text-gray-500">
                       <RefreshCw size={12} className="animate-spin text-indigo-400" />
-                      Auto-refreshing every 5 sâ€¦
+                      Auto-refreshing every 5 s…
                     </div>
                     <button
                       onClick={handleRefreshQR}
@@ -268,7 +311,7 @@ export default function WhatsAppPage() {
                     <RefreshCw size={28} className="animate-spin text-amber-400" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium text-gray-700">Generating QR codeâ€¦</p>
+                    <p className="text-sm font-medium text-gray-700">Generating QR code…</p>
                     <p className="mt-1 text-xs text-gray-400">
                       WAHA is starting the session. This usually takes a few seconds.
                     </p>
@@ -286,13 +329,19 @@ export default function WhatsAppPage() {
             </div>
           )}
 
-          {/* Connected details */}
+          {/* Connected details + test message */}
           {session.status === 'active' && (
             <div className="px-6 py-4 space-y-2">
-              {session.phone_number && (
+              {session.phone_number ? (
                 <div className="flex items-center gap-2 text-sm text-gray-700">
                   <Smartphone size={15} className="text-green-500" />
-                  <span className="font-medium">{session.phone_number}</span>
+                  <span className="font-medium">+{session.phone_number}</span>
+                  <span className="text-xs text-gray-400">(WhatsApp number)</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-sm text-gray-400">
+                  <Smartphone size={15} />
+                  <span>Phone number loading… click Check Status to refresh</span>
                 </div>
               )}
               {session.connected_at && (
@@ -300,6 +349,65 @@ export default function WhatsAppPage() {
                   Connected {new Date(session.connected_at).toLocaleString()}
                 </p>
               )}
+              {session.waha_session && (
+                <p className="text-xs text-gray-400">
+                  Session: <span className="font-mono">{session.waha_session}</span>
+                </p>
+              )}
+              {session.entity_id && (
+                <p className="text-xs text-gray-400">
+                  Entity: <span className="font-medium text-gray-600">{session.entity_id}</span>
+                </p>
+              )}
+
+              {/* ── Send test message ── */}
+              <div className="mt-3 rounded-xl border border-green-100 bg-green-50 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <MessageSquare size={15} className="text-green-600" />
+                  <p className="text-sm font-semibold text-green-800">Send a test message</p>
+                </div>
+                <div className="space-y-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-600">
+                      Recipient phone <span className="text-red-500">*</span>
+                      <span className="ml-1 font-normal text-gray-400">
+                        (international digits, no + — e.g. 919876543210)
+                      </span>
+                    </label>
+                    <input
+                      type="tel"
+                      value={testPhone}
+                      onChange={(e) => setTestPhone(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSendTest()}
+                      placeholder="919876543210"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-600">
+                      Message{' '}
+                      <span className="font-normal text-gray-400">(optional — uses default if blank)</span>
+                    </label>
+                    <textarea
+                      value={testMessage}
+                      onChange={(e) => setTestMessage(e.target.value)}
+                      placeholder="Hello! This is a test from BlueMQ."
+                      rows={2}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20 resize-none"
+                    />
+                  </div>
+                  <button
+                    onClick={handleSendTest}
+                    disabled={sending}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-700 transition-colors disabled:opacity-50"
+                  >
+                    {sending
+                      ? <RefreshCw size={14} className="animate-spin" />
+                      : <MessageSquare size={14} />}
+                    {sending ? 'Sending…' : 'Send Test Message'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

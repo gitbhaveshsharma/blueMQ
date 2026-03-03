@@ -140,6 +140,16 @@ class ApiClient {
   deleteWhatsAppSession(entityId) {
     return this.#request("DELETE", `/whatsapp/sessions/${entityId}`);
   }
+
+  sendWhatsAppTestMessage(entityId, phone, message) {
+    return this.#request(
+      "POST",
+      `/whatsapp/sessions/${entityId}/test-message`,
+      {
+        body: { phone, message },
+      },
+    );
+  }
 }
 
 export const api = new ApiClient();

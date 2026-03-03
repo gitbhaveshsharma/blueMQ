@@ -49,6 +49,10 @@ async function main() {
   app.use("/apps", appsRoutes);
   app.use("/auth", authRoutes);
 
+  // Webhook from WAHA has no x-api-key — it authenticates via ?secret= query param.
+  // Must be registered BEFORE the authMiddleware-wrapped /whatsapp block.
+  app.post("/whatsapp/sessions/webhook", whatsappSessionsRoutes.handleWebhook);
+
   // ─── Protected routes (require x-api-key) ───
   app.use("/notify", authMiddleware, notifyRoutes);
   app.use("/notifications", authMiddleware, notificationsRoutes);

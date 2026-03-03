@@ -20,6 +20,16 @@ const WAHA_SESSION = "default";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Strip null bytes (0x00) and other characters PostgreSQL UTF-8 rejects.
+ * WAHA embeds \x00 padding in its QR strings which causes NeonDbError 22021.
+ */
+function sanitizeQr(qr) {
+  if (!qr) return qr;
+  // eslint-disable-next-line no-control-regex
+  return qr.replace(/\x00/g, "");
+}
+
+/**
  * Get the current WAHA session state.
  * Tries GET /api/sessions (list) first, then GET /api/sessions/:name as fallback.
  * Returns status string (STARTING, SCAN_QR_CODE, WORKING, STOPPED, FAILED)
@@ -87,11 +97,35 @@ async function getWahaSessionState(sessionName) {
  */
 async function fetchQrCode(sessionName) {
   try {
+    // Use arraybuffer so Node.js never decodes binary PNG bytes as UTF-8.
+    // If we let axios decode as a string, binary bytes get mangled into
+    // U+FFFD replacement characters, producing an invalid data URI.
     const res = await axios.get(`${WAHA_BASE}/api/${sessionName}/auth/qr`, {
       headers: WAHA_HEADERS,
       timeout: 10000,
+      responseType: "arraybuffer",
     });
-    return res.data?.value || (typeof res.data === "string" ? res.data : null);
+
+    const contentType = (res.headers["content-type"] || "").toLowerCase();
+
+    if (contentType.includes("application/json")) {
+      // WAHA returned JSON — parse and extract the value field
+      const json = JSON.parse(Buffer.from(res.data).toString("utf8"));
+      const val = json?.value || null;
+      if (!val) return null;
+      // Already a data URI (some WAHA versions) — return as-is
+      if (val.startsWith("data:")) return val;
+      // Raw QR text payload — too long for QRCodeSVG, so we can't use it
+      // as a data URI here; return null and let the poll retry
+      return null;
+    }
+
+    // Binary image (PNG / SVG / JPEG) — safe base64 encode from the raw buffer
+    const mime = contentType.startsWith("image/")
+      ? contentType.split(";")[0].trim()
+      : "image/png";
+    const base64 = Buffer.from(res.data).toString("base64");
+    return `data:${mime};base64,${base64}`;
   } catch {
     return null;
   }
@@ -294,9 +328,10 @@ router.post("/sessions", async (req, res) => {
           ? "disconnected"
           : "pending";
 
+    const safeQrCode = sanitizeQr(qrCode);
     await sql`
       INSERT INTO whatsapp_sessions (app_id, entity_id, waha_session, status, qr_code)
-      VALUES (${appId}, ${entity_id}, ${sessionName}, ${dbStatus}, ${qrCode})
+      VALUES (${appId}, ${entity_id}, ${sessionName}, ${dbStatus}, ${safeQrCode})
       ON CONFLICT (app_id, entity_id) DO UPDATE SET
         waha_session = EXCLUDED.waha_session,
         status = EXCLUDED.status,
@@ -306,7 +341,7 @@ router.post("/sessions", async (req, res) => {
     return res.status(201).json({
       success: true,
       session: sessionName,
-      qr_code: qrCode,
+      qr_code: safeQrCode,
       status: dbStatus,
       entity_name: entity_name || entity_id,
     });
@@ -328,7 +363,7 @@ router.get("/sessions/:entity_id", async (req, res) => {
     const sql = getDb();
 
     const rows = await sql`
-      SELECT waha_session, status, phone_number, connected_at, disconnected_at, qr_code, created_at
+      SELECT entity_id, waha_session, status, phone_number, connected_at, disconnected_at, qr_code, created_at
       FROM whatsapp_sessions
       WHERE app_id = ${appId} AND entity_id = ${entity_id}
       LIMIT 1
@@ -341,6 +376,7 @@ router.get("/sessions/:entity_id", async (req, res) => {
     const session = rows[0];
     const result = {
       success: true,
+      entity_id: session.entity_id,
       waha_session: session.waha_session,
       status: session.status,
       phone_number: session.phone_number,
@@ -350,37 +386,72 @@ router.get("/sessions/:entity_id", async (req, res) => {
       qr_code: session.qr_code || null,
     };
 
-    // If still pending, try to get fresh data from WAHA (single attempt, fast)
-    if (session.status === "pending") {
+    // ── Live WAHA reconciliation ──────────────────────────────────────────────
+    // Always verify against WAHA when pending OR active-but-no-phone-number.
+    // This means the frontend sees the right state even when webhooks fail.
+    const needsReconcile =
+      session.status === "pending" ||
+      (session.status === "active" && !session.phone_number);
+
+    if (needsReconcile) {
       const wahaState = await getWahaSessionState(session.waha_session);
 
-      // Always try to get QR directly regardless of state
-      const freshQr = await fetchQrCode(session.waha_session);
+      if (wahaState === "WORKING") {
+        // ── Authenticated — mark active + fetch phone number ──
+        result.status = "active";
+        if (!result.connected_at)
+          result.connected_at = new Date().toISOString();
 
-      if (wahaState === "SCAN_QR_CODE" || freshQr) {
-        if (freshQr) {
-          result.qr_code = freshQr;
+        // Try to get the phone number from WAHA
+        let phoneNumber = null;
+        try {
+          const info = await axios.get(
+            `${WAHA_BASE}/api/sessions/${session.waha_session}`,
+            { headers: WAHA_HEADERS, timeout: 10000 },
+          );
+          phoneNumber = info.data?.me?.id?.replace("@c.us", "") || null;
+        } catch {
+          // non-fatal — phone number will be populated on next poll
+        }
+
+        result.phone_number = phoneNumber;
+        await sql`
+          UPDATE whatsapp_sessions
+          SET status = 'active',
+              connected_at = COALESCE(connected_at, now()),
+              phone_number = COALESCE(phone_number, ${phoneNumber})
+          WHERE app_id = ${appId} AND entity_id = ${entity_id}
+        `.catch(() => {});
+      } else if (session.status === "pending") {
+        // Only do QR / state updates when we are in pending state
+        if (wahaState === "SCAN_QR_CODE") {
+          const freshQr = await fetchQrCode(session.waha_session);
+          if (freshQr) {
+            result.qr_code = freshQr;
+            await sql`
+              UPDATE whatsapp_sessions SET qr_code = ${freshQr}
+              WHERE app_id = ${appId} AND entity_id = ${entity_id}
+            `.catch(() => {});
+          }
+        } else if (wahaState === "FAILED" || wahaState === "STOPPED") {
+          result.status = "disconnected";
+          result.waha_state = wahaState;
           await sql`
-            UPDATE whatsapp_sessions SET qr_code = ${freshQr}
+            UPDATE whatsapp_sessions SET status = 'disconnected', disconnected_at = now()
             WHERE app_id = ${appId} AND entity_id = ${entity_id}
           `.catch(() => {});
+        } else {
+          // STARTING — try fetching QR optimistically
+          const freshQr = await fetchQrCode(session.waha_session);
+          if (freshQr) {
+            result.qr_code = freshQr;
+            await sql`
+              UPDATE whatsapp_sessions SET qr_code = ${freshQr}
+              WHERE app_id = ${appId} AND entity_id = ${entity_id}
+            `.catch(() => {});
+          }
         }
-      } else if (wahaState === "WORKING") {
-        // Session got authenticated (via webhook or otherwise)
-        result.status = "active";
-        await sql`
-          UPDATE whatsapp_sessions SET status = 'active', connected_at = now()
-          WHERE app_id = ${appId} AND entity_id = ${entity_id}
-        `.catch(() => {});
-      } else if (wahaState === "FAILED" || wahaState === "STOPPED") {
-        result.status = "disconnected";
-        result.waha_state = wahaState;
-        await sql`
-          UPDATE whatsapp_sessions SET status = 'disconnected', disconnected_at = now()
-          WHERE app_id = ${appId} AND entity_id = ${entity_id}
-        `.catch(() => {});
       }
-      // STARTING / NOT_FOUND / null — return cached data, no restart
     }
 
     return res.json(result);
@@ -448,11 +519,80 @@ router.delete("/sessions/:entity_id", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+//  POST /whatsapp/sessions/:entity_id/test-message
+//  Send a test WhatsApp message to verify the connection works.
+//  Body: { phone: "919876543210", message?: "..." }
+//  phone must be digits only (no +, no spaces) — WhatsApp intl format
+// ─────────────────────────────────────────────────────────────
+router.post("/sessions/:entity_id/test-message", async (req, res) => {
+  try {
+    const appId = req.appId;
+    const { entity_id } = req.params;
+    const { phone, message } = req.body;
+
+    if (!phone || !/^\d{7,15}$/.test(phone.trim())) {
+      return res.status(400).json({
+        error:
+          "Required: phone — digits only, international format without + (e.g. 919876543210)",
+      });
+    }
+
+    const sql = getDb();
+
+    // Confirm this entity has an active session
+    const rows = await sql`
+      SELECT waha_session, status
+      FROM whatsapp_sessions
+      WHERE app_id = ${appId} AND entity_id = ${entity_id}
+      LIMIT 1
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    if (rows[0].status !== "active") {
+      return res
+        .status(409)
+        .json({ error: "Session is not active — scan QR first" });
+    }
+
+    const sessionName = rows[0].waha_session;
+    const chatId = `${phone.trim()}@c.us`;
+    const text =
+      message?.trim() ||
+      "👋 Hello! This is a test message from BlueMQ. Your WhatsApp integration is working correctly.";
+
+    // WAHA send text endpoint
+    await axios.post(
+      `${WAHA_BASE}/api/sendText`,
+      { chatId, text, session: sessionName },
+      { headers: WAHA_HEADERS, timeout: 15000 },
+    );
+
+    console.log(
+      `[whatsapp-sessions] ✅ Test message sent to ${chatId} via session ${sessionName}`,
+    );
+
+    return res.json({ success: true, sent_to: chatId });
+  } catch (err) {
+    const wahaError =
+      err.response?.data?.message || err.response?.data?.error || err.message;
+    console.error("[whatsapp-sessions] Test message error:", wahaError);
+    return res
+      .status(502)
+      .json({ error: `Failed to send message: ${wahaError}` });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 //  POST /whatsapp/sessions/webhook
 //  WAHA calls this when a session status changes.
 //  NO API KEY AUTH — verified via optional webhook secret.
+//  Exported as handleWebhook and registered publicly in index.js
+//  (before authMiddleware) so WAHA's requests are not rejected.
 // ─────────────────────────────────────────────────────────────
-router.post("/sessions/webhook", async (req, res) => {
+async function handleWebhook(req, res) {
   try {
     // Optional webhook secret verification
     if (config.waha.webhookSecret) {
@@ -555,6 +695,11 @@ router.post("/sessions/webhook", async (req, res) => {
     console.error("[whatsapp-webhook] Error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
-});
+}
+
+// Keep the route on the protected router too (belt-and-suspenders;
+// in practice the public registration in index.js handles it first).
+router.post("/sessions/webhook", handleWebhook);
 
 module.exports = router;
+module.exports.handleWebhook = handleWebhook;
