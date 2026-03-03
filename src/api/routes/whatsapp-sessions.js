@@ -11,13 +11,93 @@ const WAHA_HEADERS = {
   ...(config.waha.apiKey ? { "X-Api-Key": config.waha.apiKey } : {}),
 };
 
-/**
- * WAHA Core (free tier) only supports a single session named "default".
- * Always use this constant for all WAHA API calls.
- */
-const WAHA_SESSION = "default";
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The default WAHA session name.
+ * WAHA Core (free tier) only supports a single session with this name.
+ * The FIRST session created for each app always uses "default" so it works
+ * out-of-the-box with WAHA Core.  Additional sessions require WAHA Plus.
+ */
+const DEFAULT_SESSION = "default";
+
+/**
+ * WAHA tier thresholds.
+ *   - Core  (free): 1 session only (named "default")
+ *   - Plus  (paid): up to 100 concurrent sessions
+ *   - Pro   (paid): 100+ concurrent sessions
+ */
+const TIER_THRESHOLDS = { plus: 1, pro: 100 };
+
+/**
+ * Build a deterministic, URL-safe WAHA session name from appId + entityId.
+ *
+ * Examples:
+ *   buildSessionName("tutrsy", "coach_1")          → "tutrsy-coach-1"
+ *   buildSessionName("tutrsy", "coaching center 2") → "tutrsy-coaching-center-2"
+ *
+ * Rules:
+ *   - Lowercase, alphanumeric + hyphens only (WAHA session name constraints)
+ *   - Max 64 chars (safe for WAHA + logging)
+ *   - Deterministic: same inputs always produce the same name
+ */
+function buildSessionName(appId, entityId) {
+  const raw = `${appId}-${entityId}`;
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-") // replace non-alphanumeric with hyphens
+    .replace(/-+/g, "-") // collapse consecutive hyphens
+    .replace(/^-|-$/g, "") // trim leading/trailing hyphens
+    .slice(0, 64);
+}
+
+/**
+ * Resolve the WAHA session name to use for a given entity.
+ *   - First session per app → "default" (WAHA Core compatible)
+ *   - Additional sessions   → buildSessionName(appId, entityId)
+ *
+ * Also returns a `tier` hint so callers can surface upgrade warnings.
+ */
+async function resolveSessionName(sql, appId, entityId) {
+  // Count existing sessions for this app (excluding the entity being created/re-created)
+  const [{ count }] = await sql`
+    SELECT COUNT(*)::int AS count
+    FROM whatsapp_sessions
+    WHERE app_id = ${appId} AND entity_id != ${entityId}
+  `;
+
+  // Check if this entity already has a row (re-create / reconnect)
+  const [existingRow] = await sql`
+    SELECT waha_session FROM whatsapp_sessions
+    WHERE app_id = ${appId} AND entity_id = ${entityId}
+    LIMIT 1
+  `;
+
+  // If the entity already has a session name, keep it (don't rename mid-lifecycle).
+  if (existingRow) {
+    return {
+      sessionName: existingRow.waha_session,
+      totalSessions: count + 1,
+      tier:
+        count + 1 > TIER_THRESHOLDS.pro
+          ? "pro"
+          : count + 1 > TIER_THRESHOLDS.plus
+            ? "plus"
+            : "core",
+    };
+  }
+
+  // First session ever → "default" (works on free WAHA Core).
+  if (count === 0) {
+    return { sessionName: DEFAULT_SESSION, totalSessions: 1, tier: "core" };
+  }
+
+  // Additional sessions → unique name (requires WAHA Plus / Pro).
+  const sessionName = buildSessionName(appId, entityId);
+  const total = count + 1;
+  const tier = total > TIER_THRESHOLDS.pro ? "pro" : "plus";
+  return { sessionName, totalSessions: total, tier };
+}
 
 /**
  * Strip null bytes (0x00) and other characters PostgreSQL UTF-8 rejects.
@@ -145,8 +225,20 @@ router.post("/sessions", async (req, res) => {
       return res.status(400).json({ error: "Required: entity_id" });
     }
 
-    const sessionName = WAHA_SESSION;
     const sql = getDb();
+    const { sessionName, totalSessions, tier } = await resolveSessionName(
+      sql,
+      appId,
+      entity_id,
+    );
+
+    // Build tier warning (if applicable)
+    const tierWarning =
+      tier === "pro"
+        ? `You have ${totalSessions} sessions. 100+ concurrent sessions require WAHA Pro.`
+        : tier === "plus"
+          ? `You have ${totalSessions} sessions. Multiple sessions require WAHA Plus (paid). WAHA Core only supports 1 session.`
+          : null;
 
     // Check if session already exists in our DB
     const existing = await sql`
@@ -164,6 +256,8 @@ router.post("/sessions", async (req, res) => {
         phone_number: existing[0].phone_number,
         connected_at: existing[0].connected_at,
         message: "WhatsApp is already connected",
+        tier,
+        tier_warning: tierWarning,
       });
     }
 
@@ -344,9 +438,69 @@ router.post("/sessions", async (req, res) => {
       qr_code: safeQrCode,
       status: dbStatus,
       entity_name: entity_name || entity_id,
+      tier,
+      tier_warning: tierWarning,
     });
   } catch (err) {
     console.error("[whatsapp-sessions] POST error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+//  GET /whatsapp/sessions
+//  List ALL WhatsApp sessions for the authenticated app.
+//  Optional query params: ?status=active
+// ─────────────────────────────────────────────────────────────
+router.get("/sessions", async (req, res) => {
+  try {
+    const appId = req.appId;
+    const { status } = req.query;
+    const sql = getDb();
+
+    let rows;
+    if (status) {
+      rows = await sql`
+        SELECT entity_id, waha_session, status, phone_number,
+               connected_at, disconnected_at, created_at
+        FROM whatsapp_sessions
+        WHERE app_id = ${appId} AND status = ${status}
+        ORDER BY created_at DESC
+      `;
+    } else {
+      rows = await sql`
+        SELECT entity_id, waha_session, status, phone_number,
+               connected_at, disconnected_at, created_at
+        FROM whatsapp_sessions
+        WHERE app_id = ${appId}
+        ORDER BY created_at DESC
+      `;
+    }
+
+    // Determine WAHA tier based on session count
+    const total = rows.length;
+    const tier =
+      total > TIER_THRESHOLDS.pro
+        ? "pro"
+        : total > TIER_THRESHOLDS.plus
+          ? "plus"
+          : "core";
+    const tierWarning =
+      tier === "pro"
+        ? `You have ${total} sessions. 100+ concurrent sessions require WAHA Pro.`
+        : tier === "plus"
+          ? `You have ${total} sessions. Multiple sessions require WAHA Plus (paid). WAHA Core only supports 1 session.`
+          : null;
+
+    return res.json({
+      success: true,
+      count: total,
+      sessions: rows,
+      tier,
+      tier_warning: tierWarning,
+    });
+  } catch (err) {
+    console.error("[whatsapp-sessions] GET /sessions error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });

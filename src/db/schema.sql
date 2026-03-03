@@ -83,14 +83,14 @@ CREATE INDEX IF NOT EXISTS idx_notification_logs_nid
   ON notification_logs (notification_id);
 
 -- 5. WhatsApp Sessions (WAHA — one per entity / coaching center)
--- Note: waha_session is NOT unique — WAHA Core only supports one session
--- named "default", so all entities share the same WAHA session name.
--- Ownership is tracked by the UNIQUE(app_id, entity_id) constraint.
+-- Each entity gets its own named WAHA session (e.g. "tutrsy-coach-1").
+-- Session name is derived from app_id + entity_id via buildSessionName().
+-- Multi-session requires WAHA Plus; WAHA Core only supports one session.
 CREATE TABLE IF NOT EXISTS whatsapp_sessions (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_id          VARCHAR(64)  NOT NULL REFERENCES apps(app_id),
   entity_id       VARCHAR(255) NOT NULL,
-  waha_session    VARCHAR(255) NOT NULL DEFAULT 'default',
+  waha_session    VARCHAR(255) NOT NULL,
   phone_number    VARCHAR(20),
   status          VARCHAR(32)  NOT NULL DEFAULT 'pending',
   qr_code         TEXT,
@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
 -- Drop the old unique constraint on waha_session if it exists (idempotent)
 ALTER TABLE whatsapp_sessions DROP CONSTRAINT IF EXISTS whatsapp_sessions_waha_session_key;
 
+-- Fast lookup for active sessions during message sending
 CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_lookup
   ON whatsapp_sessions (app_id, entity_id)
   WHERE status = 'active';
+
+-- Fast lookup for webhook → DB row mapping
+CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_waha
+  ON whatsapp_sessions (waha_session);

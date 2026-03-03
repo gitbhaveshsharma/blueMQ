@@ -133,6 +133,12 @@ class ApiClient {
     });
   }
 
+  listWhatsAppSessions(status) {
+    return this.#request("GET", "/whatsapp/sessions", {
+      params: { status },
+    });
+  }
+
   getWhatsAppSession(entityId) {
     return this.#request("GET", `/whatsapp/sessions/${entityId}`);
   }

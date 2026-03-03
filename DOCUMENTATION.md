@@ -725,7 +725,63 @@ GET /notifications/:notificationId/logs
 
 ### 7.7 WhatsApp Session Management
 
-These endpoints manage WAHA WhatsApp sessions. Each entity (e.g. coaching centre) links one WhatsApp number via a QR-code scanning flow.
+These endpoints manage WAHA WhatsApp sessions. **Each entity (e.g. coaching centre, coach, branch) gets its own independent WAHA session with its own phone number.**
+
+#### WAHA Tier Compatibility
+
+| Tier            | Sessions per App | Session Naming                   | Cost |
+| --------------- | ---------------- | -------------------------------- | ---- |
+| **Core** (free) | 1                | `default`                        | Free |
+| **Plus**        | 2 – 100          | `default` + `appSlug-entityId-N` | Paid |
+| **Pro**         | 100+             | `default` + `appSlug-entityId-N` | Paid |
+
+- The **first** session created for an app always uses the WAHA session name `"default"`. This ensures full compatibility with WAHA Core (free tier).
+- When an app creates **additional** sessions (2+), they receive auto-generated names like `tutrsy-coach-2`. This requires **WAHA Plus** (paid).
+- For **100+** concurrent sessions, **WAHA Pro** is required.
+- The API responses include `tier` (`"core"`, `"plus"`, or `"pro"`) and an optional `tier_warning` message so your frontend can display upgrade prompts.
+
+See [WAHA pricing](https://waha.devlike.pro/docs/how-to/plus-version/) for details.
+
+You never need to manage WAHA session names directly — they are resolved automatically.
+
+#### List All Sessions
+
+```
+GET /whatsapp/sessions
+Headers: x-api-key: <your-api-key>
+Query: ?status=active  (optional — filter by status)
+```
+
+**Response `200`:**
+
+```json
+{
+  "success": true,
+  "count": 2,
+  "tier": "plus",
+  "tier_warning": "You have 2 sessions. Multiple concurrent sessions require WAHA Plus (paid).",
+  "sessions": [
+    {
+      "entity_id": "coach_1",
+      "waha_session": "default",
+      "status": "active",
+      "phone_number": "919876543210",
+      "connected_at": "2026-03-01T10:00:00.000Z",
+      "disconnected_at": null,
+      "created_at": "2026-03-01T09:55:00.000Z"
+    },
+    {
+      "entity_id": "coach_2",
+      "waha_session": "tutrsy-coach-2",
+      "status": "pending",
+      "phone_number": null,
+      "connected_at": null,
+      "disconnected_at": null,
+      "created_at": "2026-03-02T11:00:00.000Z"
+    }
+  ]
+}
+```
 
 #### Create / Re-create Session
 
@@ -733,7 +789,8 @@ These endpoints manage WAHA WhatsApp sessions. Each entity (e.g. coaching centre
 POST /whatsapp/sessions
 Headers: x-api-key: <your-api-key>
 Body: {
-  "entity_id": "coaching_center_1"
+  "entity_id": "coach_1",
+  "entity_name": "Coach Sharma"
 }
 ```
 
@@ -742,8 +799,22 @@ Body: {
 ```json
 {
   "success": true,
-  "session": "myapp-coaching-center-1",
+  "session": "default",
   "status": "pending",
+  "tier": "core",
+  "qr_code": "data:image/png;base64,..."
+}
+```
+
+If this is the second+ session for the app, `tier` will be `"plus"` or `"pro"` and a `tier_warning` field will explain the WAHA tier requirement.
+
+```json
+{
+  "success": true,
+  "session": "tutrsy-coach-2",
+  "status": "pending",
+  "tier": "plus",
+  "tier_warning": "You now have 2 sessions. Multiple concurrent sessions require WAHA Plus (paid).",
   "qr_code": "data:image/png;base64,..."
 }
 ```
@@ -762,14 +833,32 @@ Headers: x-api-key: <your-api-key>
 ```json
 {
   "success": true,
-  "session": {
-    "entity_id": "coaching_center_1",
-    "waha_session": "myapp-coaching-center-1",
-    "phone_number": "+919876543210",
-    "status": "active",
-    "qr_code": null,
-    "connected_at": "2026-03-01T10:00:00.000Z"
-  }
+  "entity_id": "coach_1",
+  "waha_session": "tutrsy-coach-1",
+  "phone_number": "919876543210",
+  "status": "active",
+  "qr_code": null,
+  "connected_at": "2026-03-01T10:00:00.000Z"
+}
+```
+
+#### Send Test Message
+
+```
+POST /whatsapp/sessions/:entity_id/test-message
+Headers: x-api-key: <your-api-key>
+Body: {
+  "phone": "919876543210",
+  "message": "Hello from BlueMQ!"
+}
+```
+
+**Response `200`:**
+
+```json
+{
+  "success": true,
+  "sent_to": "919876543210@c.us"
 }
 ```
 
@@ -784,8 +873,7 @@ Headers: x-api-key: <your-api-key>
 
 ```json
 {
-  "success": true,
-  "message": "Session disconnected"
+  "success": true
 }
 ```
 
@@ -889,7 +977,8 @@ A common pattern is to create one template per `(type, channel)` combination and
 - **Delivery address:** `user.phone` (E.164 format, converted to `phone@c.us` chatId)
 - **Concurrency:** 5 workers
 - **Retries:** 5 (exponential back-off starting at 30 seconds)
-- **Requires:** An active WAHA session for the `entity_id`. Sessions are managed via the `/whatsapp/sessions` endpoints.
+- **Requires:** An active WAHA session for the `entity_id`. Sessions are managed via the `/whatsapp/sessions` endpoints. Each entity gets its own independent session and phone number.
+- **Tier system:** The first session per app uses the WAHA session name `"default"` (WAHA Core compatible). Additional sessions (2+) require **WAHA Plus**; 100+ sessions require **WAHA Pro**. API responses include `tier` and `tier_warning` fields.
 - **Notes:** The WhatsApp worker first looks up the active session for the given `entity_id` (e.g. coaching centre). If no active session is found, the job fails immediately without retries. Messages are sent as plain text via the WAHA REST API.
 
 ### In-App (`inapp`)

@@ -154,13 +154,34 @@ Headers: x-api-key: <your-api-key>
 
 ### WhatsApp Session Management
 
+Each entity (e.g. coaching centre, coach, branch) gets its own independent WhatsApp session with a unique phone number.
+
+#### WAHA Tier Compatibility
+
+| Tier            | Sessions | First Session Name | Additional Session Names |
+| --------------- | -------- | ------------------ | ------------------------ |
+| **Core** (free) | 1        | `default`          | —                        |
+| **Plus** (paid) | 2 – 100  | `default`          | `appSlug-entityId-N`     |
+| **Pro** (paid)  | 100+     | `default`          | `appSlug-entityId-N`     |
+
+The **first** session per app always uses the WAHA session name `"default"` (WAHA Core compatible). Additional sessions require WAHA Plus or Pro. API responses include `tier` and `tier_warning` fields.
+
+**List All Sessions**
+
+```
+GET /whatsapp/sessions
+Headers: x-api-key: <your-api-key>
+Query: ?status=active  (optional filter)
+Response: { "success": true, "count": 2, "tier": "plus", "tier_warning": "...", "sessions": [ ... ] }
+```
+
 **Create Session** — returns a QR code for scanning
 
 ```
 POST /whatsapp/sessions
 Headers: x-api-key: <your-api-key>
-Body: { "entity_id": "coaching_center_1" }
-Response (201): { "success": true, "session": "...", "status": "pending", "qr_code": "data:image/..." }
+Body: { "entity_id": "coach_1", "entity_name": "Coach Sharma" }
+Response (201): { "success": true, "session": "default", "status": "pending", "tier": "core", "qr_code": "data:image/..." }
 ```
 
 **Get Session Status**
@@ -168,6 +189,14 @@ Response (201): { "success": true, "session": "...", "status": "pending", "qr_co
 ```
 GET /whatsapp/sessions/:entity_id
 Headers: x-api-key: <your-api-key>
+```
+
+**Send Test Message**
+
+```
+POST /whatsapp/sessions/:entity_id/test-message
+Headers: x-api-key: <your-api-key>
+Body: { "phone": "919876543210", "message": "Hello!" }
 ```
 
 **Delete / Logout Session**
