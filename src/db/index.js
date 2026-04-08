@@ -1,5 +1,12 @@
-const { neon } = require("@neondatabase/serverless");
+const { neon, neonConfig } = require("@neondatabase/serverless");
 const config = require("../config");
+
+// Configure WebSocket for Node.js environments (non-edge)
+// This is required for @neondatabase/serverless to work on regular Node.js servers
+if (typeof WebSocket === 'undefined') {
+  const ws = require("ws");
+  neonConfig.webSocketConstructor = ws;
+}
 
 let sql;
 
