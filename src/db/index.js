@@ -1,138 +1,200 @@
-const { neon, neonConfig } = require("@neondatabase/serverless");
+const { Pool } = require("pg");
 const config = require("../config");
 
-// Configure WebSocket for Node.js environments (non-edge)
-// This is required for @neondatabase/serverless to work on regular Node.js servers
-if (typeof WebSocket === 'undefined') {
-  const ws = require("ws");
-  neonConfig.webSocketConstructor = ws;
+let pool;
+
+// Categorise errors so callers can react appropriately
+const ErrorType = {
+  CONNECTION: "CONNECTION_ERROR",
+  TIMEOUT: "TIMEOUT_ERROR",
+  AUTH: "AUTH_ERROR",
+  QUERY: "QUERY_ERROR",
+  UNKNOWN: "UNKNOWN_ERROR",
+};
+
+function classifyError(error) {
+  const msg = error.message?.toLowerCase() ?? "";
+  const code = error.code ?? "";
+
+  if (["28p01", "28000"].includes(code)) return ErrorType.AUTH; // bad credentials
+  if (
+    ["econnrefused", "enotfound", "econnreset", "enetunreach"].includes(
+      code.toLowerCase(),
+    )
+  )
+    return ErrorType.CONNECTION;
+  if (
+    code === "ETIMEDOUT" ||
+    msg.includes("timeout") ||
+    msg.includes("timed out")
+  )
+    return ErrorType.TIMEOUT;
+  if (
+    error.severity === "ERROR" ||
+    code.startsWith("42") ||
+    code.startsWith("23")
+  )
+    return ErrorType.QUERY; // syntax / constraint
+  return ErrorType.UNKNOWN;
 }
 
-let sql;
+function isRetryable(error) {
+  const type = classifyError(error);
+  return [ErrorType.CONNECTION, ErrorType.TIMEOUT, ErrorType.UNKNOWN].includes(
+    type,
+  );
+}
 
-/**
- * Get the Neon SQL tagged-template client.
- * Lazily initialised on first call.
- */
+class DbError extends Error {
+  constructor(message, { type, cause, attempt, maxRetries } = {}) {
+    super(message);
+    this.name = "DbError";
+    this.type = type ?? ErrorType.UNKNOWN;
+    this.cause = cause ?? null;
+    this.attempt = attempt ?? null;
+    this.maxRetries = maxRetries ?? null;
+  }
+}
+
 function getDb() {
-  if (!sql) {
+  if (!pool) {
     if (!config.database.url) {
-      throw new Error("DATABASE_URL is not set");
+      throw new DbError("DATABASE_URL is not set", { type: ErrorType.CONFIG });
     }
 
-    // Configure Neon client with fetch options for better timeout handling
-    sql = neon(config.database.url, {
-      fetchOptions: {
-        // Set connection timeout to prevent indefinite hanging
-        // This helps in environments with poor network connectivity
-        signal: null, // Will be set per-query if needed
-      },
-      // Full results mode for better compatibility
-      fullResults: false,
+    pool = new Pool({
+      connectionString: config.database.url,
+      ssl: { rejectUnauthorized: false },
+      connectionTimeoutMillis: config.database.connectionTimeoutMs || 30000,
+      idleTimeoutMillis: 60000, // release idle clients after 60s
+      max: 10,
+    });
+
+    // Log pool-level errors so they don't crash the process silently
+    pool.on("error", (err, client) => {
+      console.error("[db] Unexpected pool client error:", {
+        message: err.message,
+        code: err.code,
+        type: classifyError(err),
+      });
+    });
+
+    pool.on("connect", () => {
+      console.log("[db] New client connected to pool");
     });
   }
-  return sql;
+  return pool;
 }
 
-/**
- * Execute a query with retry logic and timeout handling.
- * @param {Function} queryFn - The query function to execute
- * @param {number} maxRetries - Maximum number of retry attempts
- * @param {number} retryDelay - Delay between retries in milliseconds
- * @returns {Promise<any>} Query result
- */
 async function executeWithRetry(
   queryFn,
-  maxRetries = config.database.maxRetries,
-  retryDelay = config.database.retryDelayMs,
+  maxRetries = config.database?.maxRetries ?? 3,
+  retryDelay = config.database?.retryDelayMs ?? 2000,
 ) {
   let lastError;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Create an AbortController for timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(
-        () => controller.abort(),
-        config.database.connectionTimeoutMs,
-      );
-
-      try {
-        const result = await queryFn();
-        clearTimeout(timeoutId);
-
-        if (attempt > 1) {
-          console.log(
-            `[db] Query succeeded on attempt ${attempt}/${maxRetries}`,
-          );
-        }
-
-        return result;
-      } catch (error) {
-        clearTimeout(timeoutId);
-        throw error;
+      const result = await queryFn();
+      if (attempt > 1) {
+        console.log(`[db] Query succeeded on attempt ${attempt}/${maxRetries}`);
       }
+      return result;
     } catch (error) {
       lastError = error;
+      const type = classifyError(error);
 
-      const isTimeout =
-        error.name === "AbortError" ||
-        error.code === "ETIMEDOUT" ||
-        error.message?.includes("fetch failed") ||
-        error.message?.includes("ETIMEDOUT");
+      // Auth and query errors are permanent — no point retrying
+      if (!isRetryable(error)) {
+        console.error(`[db] Non-retryable error (${type}):`, {
+          message: error.message,
+          code: error.code,
+          detail: error.detail ?? null,
+        });
+        throw new DbError(`Query failed: ${error.message}`, {
+          type,
+          cause: error,
+          attempt,
+          maxRetries,
+        });
+      }
 
-      const isNetworkError =
-        error.code === "ECONNREFUSED" ||
-        error.code === "ENOTFOUND" ||
-        error.code === "ECONNRESET";
-
-      // Retry on timeout or network errors
-      if ((isTimeout || isNetworkError) && attempt < maxRetries) {
-        const delay = retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
+      if (attempt < maxRetries) {
+        const delay = retryDelay * Math.pow(2, attempt - 1); // exponential backoff
         console.warn(
-          `[db] Connection attempt ${attempt}/${maxRetries} failed (${error.code || error.name}). ` +
-            `Retrying in ${delay}ms...`,
+          `[db] Attempt ${attempt}/${maxRetries} failed (${type} — ${error.code ?? error.message}). Retrying in ${delay}ms...`,
         );
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        continue;
-      }
-
-      // Don't retry on other errors
-      if (!isTimeout && !isNetworkError) {
-        throw error;
-      }
-
-      // Max retries exhausted
-      if (attempt === maxRetries) {
-        console.error(
-          `[db] Failed after ${maxRetries} attempts. Last error:`,
-          error.message || error,
-        );
-        throw new Error(
-          `Database connection failed after ${maxRetries} attempts. ` +
-            `Check network connectivity and DATABASE_URL. ` +
-            `Original error: ${error.message}`,
-        );
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   }
 
-  throw lastError;
+  // All retries exhausted
+  console.error(`[db] All ${maxRetries} attempts failed. Last error:`, {
+    message: lastError.message,
+    code: lastError.code,
+    type: classifyError(lastError),
+  });
+
+  throw new DbError(
+    `Database connection failed after ${maxRetries} attempts. Original error: ${lastError.message}`,
+    {
+      type: classifyError(lastError),
+      cause: lastError,
+      attempt: maxRetries,
+      maxRetries,
+    },
+  );
 }
 
-/**
- * Test database connectivity
- * @returns {Promise<boolean>} True if connection successful
- */
 async function testConnection() {
   try {
-    const sql = getDb();
-    await executeWithRetry(() => sql`SELECT 1 as health_check`);
+    const db = getDb();
+    const start = Date.now();
+    await db.query("SELECT 1 AS health_check");
+    console.log(`[db] Connection test successful (${Date.now() - start}ms)`);
     return true;
   } catch (error) {
-    console.error("[db] Health check failed:", error.message);
+    const type = classifyError(error);
+    console.error("[db] Health check failed:", {
+      message: error.message,
+      code: error.code ?? null,
+      type,
+      hint: getHint(type),
+    });
     return false;
   }
 }
 
-module.exports = { getDb, executeWithRetry, testConnection };
+// Human-readable hints per error type
+function getHint(type) {
+  const hints = {
+    [ErrorType.AUTH]: "Check DATABASE_URL username and password",
+    [ErrorType.CONNECTION]:
+      "Check network connectivity and Neon firewall / IP allowlist",
+    [ErrorType.TIMEOUT]:
+      "Neon may be paused or the droplet is blocking outbound port 5432",
+    [ErrorType.QUERY]:
+      "SQL syntax or constraint violation — not a connection issue",
+    [ErrorType.UNKNOWN]: "Check Neon console for database status",
+  };
+  return hints[type] ?? "Unknown error";
+}
+
+async function closePool() {
+  if (pool) {
+    console.log("[db] Closing connection pool...");
+    await pool.end();
+    pool = null;
+    console.log("[db] Pool closed");
+  }
+}
+
+module.exports = {
+  getDb,
+  executeWithRetry,
+  testConnection,
+  closePool,
+  DbError,
+  ErrorType,
+};
