@@ -6,6 +6,10 @@ const config = {
   // ─── Database (Neon) ───
   database: {
     url: process.env.DATABASE_URL,
+    connectionTimeoutMs:
+      parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) || 30000,
+    maxRetries: parseInt(process.env.DB_MAX_RETRIES, 10) || 3,
+    retryDelayMs: parseInt(process.env.DB_RETRY_DELAY_MS, 10) || 2000,
   },
 
   // ─── Redis (BullMQ) ───
