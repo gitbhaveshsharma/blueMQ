@@ -82,22 +82,31 @@ CREATE TABLE IF NOT EXISTS notification_logs (
 CREATE INDEX IF NOT EXISTS idx_notification_logs_nid
   ON notification_logs (notification_id);
 
--- 5. WhatsApp Sessions (WAHA — one per entity / coaching center)
--- Each entity gets its own named WAHA session (e.g. "tutrsy-coach-1").
+-- 5. WhatsApp Sessions (one per entity / coaching center)
+-- Supports two connection types:
+--   - 'waha': Self-hosted WAHA instance with QR code scanning
+--   - 'meta': Meta WhatsApp Cloud API with API key authentication
+-- Each entity gets its own named WAHA session (e.g. "tutrsy-coach-1") for WAHA connections.
 -- Session name is derived from app_id + entity_id via buildSessionName().
 -- Multi-session requires WAHA Plus; WAHA Core only supports one session.
 CREATE TABLE IF NOT EXISTS whatsapp_sessions (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  app_id          VARCHAR(64)  NOT NULL REFERENCES apps(app_id),
-  entity_id       VARCHAR(255) NOT NULL,
-  waha_session    VARCHAR(255) NOT NULL,
-  phone_number    VARCHAR(20),
-  status          VARCHAR(32)  NOT NULL DEFAULT 'pending',
-  qr_code         TEXT,
-  connected_at    TIMESTAMPTZ,
-  disconnected_at TIMESTAMPTZ,
-  created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
-  UNIQUE (app_id, entity_id)
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id                   VARCHAR(64)  NOT NULL REFERENCES apps(app_id),
+  entity_id                VARCHAR(255) NOT NULL,
+  waha_session             VARCHAR(255) NOT NULL,
+  phone_number             VARCHAR(20),
+  status                   VARCHAR(32)  NOT NULL DEFAULT 'pending',
+  qr_code                  TEXT,
+  connected_at             TIMESTAMPTZ,
+  disconnected_at          TIMESTAMPTZ,
+  created_at               TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  -- Meta WhatsApp Cloud API fields (used when connection_type = 'meta')
+  connection_type          VARCHAR(20)  NOT NULL DEFAULT 'waha',
+  meta_api_key             TEXT         DEFAULT NULL,
+  meta_phone_number_id     VARCHAR(100) DEFAULT NULL,
+  meta_business_account_id VARCHAR(100) DEFAULT NULL,
+  UNIQUE (app_id, entity_id),
+  CONSTRAINT chk_connection_type CHECK (connection_type IN ('waha', 'meta'))
 );
 
 -- Drop the old unique constraint on waha_session if it exists (idempotent)

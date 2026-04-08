@@ -10,15 +10,15 @@ Client App  →  POST /notify  →  API Layer  →  BullMQ Queues  →  Workers 
                                                                          Neon DB (logs)
 ```
 
-### Channels
+## Channels
 
-| Channel  | Provider         | Concurrency | Retries |
-| -------- | ---------------- | ----------- | ------- |
-| Push     | OneSignal        | 10          | 3       |
-| Email    | OneSignal        | 5           | 3       |
-| SMS      | OneSignal        | 5           | 5       |
-| WhatsApp | WAHA (self-host) | 5           | 5       |
-| In-App   | DB (direct)      | 20          | 2       |
+| Channel  | Provider               | Concurrency | Retries |
+| -------- | ---------------------- | ----------- | ------- |
+| Push     | OneSignal              | 10          | 3       |
+| Email    | OneSignal              | 5           | 3       |
+| SMS      | OneSignal              | 5           | 5       |
+| WhatsApp | WAHA or Meta Cloud API | 5           | 5       |
+| In-App   | DB (direct)            | 20          | 2       |
 
 ## Quick Start
 
@@ -226,6 +226,23 @@ POST /whatsapp/sessions/webhook?secret=<WAHA_WEBHOOK_SECRET>
 3. Connect your GitHub repo
 4. Set environment variables from `.env.example`
 5. Deploy — Railway auto-detects `npm start`
+
+## Deploy to DigitalOcean Droplet
+
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for a comprehensive guide covering:
+
+- Initial server setup (Ubuntu 22.04)
+- Node.js, Docker, Redis, Nginx installation
+- SSL/TLS with Let's Encrypt
+- PM2 process management
+- Monitoring and maintenance
+
+**Quick start:**
+
+```bash
+# On your droplet (as root)
+curl -fsSL https://raw.githubusercontent.com/gitbhaveshsharma/blueMQ/main/scripts/setup-droplet.sh | bash
+```
 
 ## Folder Structure
 

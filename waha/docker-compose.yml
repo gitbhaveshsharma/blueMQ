@@ -6,9 +6,12 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - WHATSAPP_API_KEY=${WHATSAPP_API_KEY}
-      - WHATSAPP_HOOK_URL=${WHATSAPP_HOOK_URL}
+      # API key — must match WAHA_API_KEY in BlueMQ's .env
+      - WHATSAPP_API_KEY=${WAHA_API_KEY:-${WHATSAPP_API_KEY}}
+      # Webhook URL — BlueMQ will receive session status updates here
+      - WHATSAPP_HOOK_URL=${WHATSAPP_HOOK_URL:-${BASE_URL}/whatsapp/sessions/webhook?secret=${WAHA_WEBHOOK_SECRET}}
       - WHATSAPP_HOOK_EVENTS=session.status
+      # WhatsApp engine — WEBJS is more stable
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
       - WAHA_LOG_LEVEL=info
     volumes:

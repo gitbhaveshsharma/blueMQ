@@ -213,19 +213,112 @@ async function fetchQrCode(sessionName) {
 
 // ─────────────────────────────────────────────────────────────
 //  POST /whatsapp/sessions
-//  Create a new WAHA session for an entity.
-//  Waits for QR to become available (WEBJS can take 20-30 s).
+//  Create a new WhatsApp session for an entity.
+//  Supports two connection types:
+//    - 'waha' (default): Creates WAHA session, waits for QR
+//    - 'meta': Saves Meta API credentials, marks active immediately
 // ─────────────────────────────────────────────────────────────
 router.post("/sessions", async (req, res) => {
   try {
     const appId = req.appId;
-    const { entity_id, entity_name } = req.body;
+    const {
+      entity_id,
+      entity_name,
+      connection_type = "waha",
+      meta_api_key,
+      meta_phone_number_id,
+      meta_business_account_id,
+    } = req.body;
 
     if (!entity_id) {
       return res.status(400).json({ error: "Required: entity_id" });
     }
 
+    // Validate connection_type
+    if (!["waha", "meta"].includes(connection_type)) {
+      return res.status(400).json({
+        error: "Invalid connection_type. Must be 'waha' or 'meta'",
+      });
+    }
+
     const sql = getDb();
+
+    // ─── Meta WhatsApp Cloud API Connection ───
+    if (connection_type === "meta") {
+      // Validate Meta-specific fields
+      if (!meta_api_key) {
+        return res.status(400).json({
+          error: "Required for Meta connection: meta_api_key",
+        });
+      }
+      if (!meta_phone_number_id) {
+        return res.status(400).json({
+          error: "Required for Meta connection: meta_phone_number_id",
+        });
+      }
+
+      // Check if session already exists
+      const existing = await sql`
+        SELECT id, status, connection_type
+        FROM whatsapp_sessions
+        WHERE app_id = ${appId} AND entity_id = ${entity_id}
+        LIMIT 1
+      `;
+
+      if (existing.length > 0 && existing[0].status === "active") {
+        return res.json({
+          success: true,
+          connection_type: existing[0].connection_type,
+          status: "active",
+          message: "WhatsApp session is already active",
+        });
+      }
+
+      // Generate a placeholder session name for Meta (not used but required by schema)
+      const metaSessionName = `meta-${appId}-${entity_id}`
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .slice(0, 64);
+
+      // Upsert Meta session — active immediately (no QR scan needed)
+      await sql`
+        INSERT INTO whatsapp_sessions (
+          app_id, entity_id, waha_session, status, connection_type,
+          meta_api_key, meta_phone_number_id, meta_business_account_id,
+          connected_at
+        )
+        VALUES (
+          ${appId}, ${entity_id}, ${metaSessionName}, 'active', 'meta',
+          ${meta_api_key}, ${meta_phone_number_id}, ${meta_business_account_id || null},
+          now()
+        )
+        ON CONFLICT (app_id, entity_id) DO UPDATE SET
+          waha_session = EXCLUDED.waha_session,
+          status = 'active',
+          connection_type = 'meta',
+          meta_api_key = EXCLUDED.meta_api_key,
+          meta_phone_number_id = EXCLUDED.meta_phone_number_id,
+          meta_business_account_id = EXCLUDED.meta_business_account_id,
+          connected_at = now(),
+          disconnected_at = NULL
+      `;
+
+      console.log(
+        `[whatsapp-sessions] ✅ Meta session created for entity ${entity_id}`,
+      );
+
+      return res.status(201).json({
+        success: true,
+        connection_type: "meta",
+        status: "active",
+        entity_id,
+        entity_name: entity_name || entity_id,
+        message: "Meta WhatsApp API configured successfully",
+      });
+    }
+
+    // ─── WAHA Connection (existing flow) ───
     const { sessionName, totalSessions, tier } = await resolveSessionName(
       sql,
       appId,
@@ -461,7 +554,7 @@ router.get("/sessions", async (req, res) => {
     let rows;
     if (status) {
       rows = await sql`
-        SELECT entity_id, waha_session, status, phone_number,
+        SELECT entity_id, waha_session, status, phone_number, connection_type,
                connected_at, disconnected_at, created_at
         FROM whatsapp_sessions
         WHERE app_id = ${appId} AND status = ${status}
@@ -469,7 +562,7 @@ router.get("/sessions", async (req, res) => {
       `;
     } else {
       rows = await sql`
-        SELECT entity_id, waha_session, status, phone_number,
+        SELECT entity_id, waha_session, status, phone_number, connection_type,
                connected_at, disconnected_at, created_at
         FROM whatsapp_sessions
         WHERE app_id = ${appId}
@@ -509,6 +602,7 @@ router.get("/sessions", async (req, res) => {
 //  GET /whatsapp/sessions/:entity_id
 //  Check connection status. Frontend polls this every 5 s.
 //  LIGHTWEIGHT — no restarts, no retries. Just fetch QR once.
+//  For Meta sessions, returns masked API key (last 6 chars only).
 // ─────────────────────────────────────────────────────────────
 router.get("/sessions/:entity_id", async (req, res) => {
   try {
@@ -517,7 +611,9 @@ router.get("/sessions/:entity_id", async (req, res) => {
     const sql = getDb();
 
     const rows = await sql`
-      SELECT entity_id, waha_session, status, phone_number, connected_at, disconnected_at, qr_code, created_at
+      SELECT entity_id, waha_session, status, phone_number, connected_at, 
+             disconnected_at, qr_code, created_at, connection_type,
+             meta_api_key, meta_phone_number_id, meta_business_account_id
       FROM whatsapp_sessions
       WHERE app_id = ${appId} AND entity_id = ${entity_id}
       LIMIT 1
@@ -528,6 +624,15 @@ router.get("/sessions/:entity_id", async (req, res) => {
     }
 
     const session = rows[0];
+    const connectionType = session.connection_type || "waha";
+
+    // Helper to mask API key (show only last 6 chars)
+    const maskApiKey = (key) => {
+      if (!key) return null;
+      if (key.length <= 6) return "...***";
+      return "..." + key.slice(-6);
+    };
+
     const result = {
       success: true,
       entity_id: session.entity_id,
@@ -537,10 +642,21 @@ router.get("/sessions/:entity_id", async (req, res) => {
       connected_at: session.connected_at,
       disconnected_at: session.disconnected_at,
       created_at: session.created_at,
+      connection_type: connectionType,
       qr_code: session.qr_code || null,
     };
 
-    // ── Live WAHA reconciliation ──────────────────────────────────────────────
+    // Add Meta-specific fields if connection_type is 'meta'
+    if (connectionType === "meta") {
+      result.meta_api_key = maskApiKey(session.meta_api_key);
+      result.meta_phone_number_id = session.meta_phone_number_id;
+      result.meta_business_account_id =
+        session.meta_business_account_id || null;
+      // Meta sessions don't need WAHA reconciliation
+      return res.json(result);
+    }
+
+    // ── Live WAHA reconciliation (only for WAHA connections) ─────────────────
     // Always verify against WAHA when pending OR active-but-no-phone-number.
     // This means the frontend sees the right state even when webhooks fail.
     const needsReconcile =
@@ -618,6 +734,8 @@ router.get("/sessions/:entity_id", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  DELETE /whatsapp/sessions/:entity_id
 //  Coach disconnects their WhatsApp.
+//  For WAHA: logs out and stops the WAHA session.
+//  For Meta: just marks as disconnected (no API call needed).
 // ─────────────────────────────────────────────────────────────
 router.delete("/sessions/:entity_id", async (req, res) => {
   try {
@@ -626,7 +744,7 @@ router.delete("/sessions/:entity_id", async (req, res) => {
     const sql = getDb();
 
     const rows = await sql`
-      SELECT waha_session FROM whatsapp_sessions
+      SELECT waha_session, connection_type FROM whatsapp_sessions
       WHERE app_id = ${appId} AND entity_id = ${entity_id}
       LIMIT 1
     `;
@@ -635,35 +753,48 @@ router.delete("/sessions/:entity_id", async (req, res) => {
       return res.status(404).json({ error: "Session not found" });
     }
 
-    const sessionName = rows[0].waha_session;
+    const { waha_session: sessionName, connection_type: connectionType } =
+      rows[0];
 
-    // Logout from WhatsApp
-    try {
-      await axios.post(
-        `${WAHA_BASE}/api/sessions/${sessionName}/logout`,
-        {},
-        { headers: WAHA_HEADERS, timeout: 10000 },
-      );
-    } catch (err) {
-      console.warn("[whatsapp-sessions] Logout warning:", err.message);
+    // Only call WAHA API for WAHA connections
+    if (connectionType !== "meta") {
+      // Logout from WhatsApp
+      try {
+        await axios.post(
+          `${WAHA_BASE}/api/sessions/${sessionName}/logout`,
+          {},
+          { headers: WAHA_HEADERS, timeout: 10000 },
+        );
+      } catch (err) {
+        console.warn("[whatsapp-sessions] Logout warning:", err.message);
+      }
+
+      // Stop the WAHA session
+      try {
+        await axios.delete(`${WAHA_BASE}/api/sessions/${sessionName}`, {
+          headers: WAHA_HEADERS,
+          timeout: 10000,
+        });
+      } catch (err) {
+        console.warn(
+          "[whatsapp-sessions] Delete session warning:",
+          err.message,
+        );
+      }
     }
 
-    // Stop the WAHA session
-    try {
-      await axios.delete(`${WAHA_BASE}/api/sessions/${sessionName}`, {
-        headers: WAHA_HEADERS,
-        timeout: 10000,
-      });
-    } catch (err) {
-      console.warn("[whatsapp-sessions] Delete session warning:", err.message);
-    }
-
-    // Update DB
+    // Update DB — clear Meta credentials for security
     await sql`
       UPDATE whatsapp_sessions
-      SET status = 'disconnected', disconnected_at = now()
+      SET status = 'disconnected',
+          disconnected_at = now(),
+          meta_api_key = NULL
       WHERE app_id = ${appId} AND entity_id = ${entity_id}
     `;
+
+    console.log(
+      `[whatsapp-sessions] Session ${entity_id} disconnected (type: ${connectionType || "waha"})`,
+    );
 
     return res.json({ success: true });
   } catch (err) {
@@ -677,6 +808,7 @@ router.delete("/sessions/:entity_id", async (req, res) => {
 //  Send a test WhatsApp message to verify the connection works.
 //  Body: { phone: "919876543210", message?: "..." }
 //  phone must be digits only (no +, no spaces) — WhatsApp intl format
+//  Supports both WAHA and Meta WhatsApp providers.
 // ─────────────────────────────────────────────────────────────
 router.post("/sessions/:entity_id/test-message", async (req, res) => {
   try {
@@ -695,7 +827,7 @@ router.post("/sessions/:entity_id/test-message", async (req, res) => {
 
     // Confirm this entity has an active session
     const rows = await sql`
-      SELECT waha_session, status
+      SELECT waha_session, status, connection_type, meta_api_key, meta_phone_number_id
       FROM whatsapp_sessions
       WHERE app_id = ${appId} AND entity_id = ${entity_id}
       LIMIT 1
@@ -705,37 +837,84 @@ router.post("/sessions/:entity_id/test-message", async (req, res) => {
       return res.status(404).json({ error: "Session not found" });
     }
 
-    if (rows[0].status !== "active") {
+    const session = rows[0];
+
+    if (session.status !== "active") {
+      const connectionHint =
+        session.connection_type === "meta"
+          ? "configure Meta API credentials"
+          : "scan QR first";
       return res
         .status(409)
-        .json({ error: "Session is not active — scan QR first" });
+        .json({ error: `Session is not active — ${connectionHint}` });
     }
 
-    const sessionName = rows[0].waha_session;
-    const chatId = `${phone.trim()}@c.us`;
+    const cleanPhone = phone.trim();
     const text =
       message?.trim() ||
       "👋 Hello! This is a test message from BlueMQ. Your WhatsApp integration is working correctly.";
 
-    // WAHA send text endpoint
-    await axios.post(
-      `${WAHA_BASE}/api/sendText`,
-      { chatId, text, session: sessionName },
-      { headers: WAHA_HEADERS, timeout: 15000 },
-    );
+    // Route to appropriate provider
+    if (session.connection_type === "meta") {
+      // ─── Meta WhatsApp Cloud API ───
+      const { getWhatsAppProvider } = require("../../providers/bootstrap");
+      const metaProvider = getWhatsAppProvider("meta");
 
-    console.log(
-      `[whatsapp-sessions] ✅ Test message sent to ${chatId} via session ${sessionName}`,
-    );
+      const result = await metaProvider.sendWhatsApp({
+        metaApiKey: session.meta_api_key,
+        metaPhoneNumberId: session.meta_phone_number_id,
+        user: { phone: cleanPhone },
+        body: text,
+      });
 
-    return res.json({ success: true, sent_to: chatId });
+      if (!result.success) {
+        console.error(
+          "[whatsapp-sessions] Meta test message error:",
+          result.error,
+        );
+        return res
+          .status(502)
+          .json({ error: `Failed to send message: ${result.error}` });
+      }
+
+      console.log(
+        `[whatsapp-sessions] ✅ Test message sent to ${cleanPhone} via Meta API`,
+      );
+
+      return res.json({
+        success: true,
+        sent_to: cleanPhone,
+        provider: "meta-whatsapp",
+        message_id: result.providerMessageId,
+      });
+    } else {
+      // ─── WAHA ───
+      const sessionName = session.waha_session;
+      const chatId = `${cleanPhone}@c.us`;
+
+      await axios.post(
+        `${WAHA_BASE}/api/sendText`,
+        { chatId, text, session: sessionName },
+        { headers: WAHA_HEADERS, timeout: 15000 },
+      );
+
+      console.log(
+        `[whatsapp-sessions] ✅ Test message sent to ${chatId} via WAHA session ${sessionName}`,
+      );
+
+      return res.json({
+        success: true,
+        sent_to: chatId,
+        provider: "waha",
+      });
+    }
   } catch (err) {
-    const wahaError =
+    const errorMsg =
       err.response?.data?.message || err.response?.data?.error || err.message;
-    console.error("[whatsapp-sessions] Test message error:", wahaError);
+    console.error("[whatsapp-sessions] Test message error:", errorMsg);
     return res
       .status(502)
-      .json({ error: `Failed to send message: ${wahaError}` });
+      .json({ error: `Failed to send message: ${errorMsg}` });
   }
 });
 

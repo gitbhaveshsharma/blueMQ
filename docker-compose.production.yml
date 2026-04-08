@@ -1,0 +1,158 @@
+# BlueMQ Full Stack Docker Compose
+# Usage: docker compose -f docker-compose.production.yml up -d
+#
+# This file orchestrates all BlueMQ services:
+# - BlueMQ API (Node.js)
+# - WAHA (WhatsApp HTTP API)
+# - Redis (Queue backend)
+# - Nginx (Reverse proxy with SSL)
+#
+# Note: PostgreSQL is external (Neon) — not included here.
+
+version: "3.9"
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  # BlueMQ API
+  # ─────────────────────────────────────────────────────────────
+  bluemq:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bluemq-api
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+      - ONESIGNAL_APP_ID=${ONESIGNAL_APP_ID}
+      - ONESIGNAL_API_KEY=${ONESIGNAL_API_KEY}
+      - WAHA_BASE_URL=http://waha:3000
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_WEBHOOK_SECRET=${WAHA_WEBHOOK_SECRET}
+      - BASE_URL=${BASE_URL}
+      - SERVICE_API_KEY_SECRET=${SERVICE_API_KEY_SECRET}
+    depends_on:
+      redis:
+        condition: service_healthy
+      waha:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3001/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - bluemq-network
+    # Don't expose directly — use Nginx
+    expose:
+      - "3001"
+
+  # ─────────────────────────────────────────────────────────────
+  # WAHA (WhatsApp HTTP API)
+  # ─────────────────────────────────────────────────────────────
+  waha:
+    image: devlikeapro/waha
+    container_name: bluemq-waha
+    restart: unless-stopped
+    environment:
+      - WHATSAPP_API_KEY=${WAHA_API_KEY}
+      - WHATSAPP_HOOK_URL=${BASE_URL}/whatsapp/sessions/webhook?secret=${WAHA_WEBHOOK_SECRET}
+      - WHATSAPP_HOOK_EVENTS=session.status
+      - WHATSAPP_DEFAULT_ENGINE=WEBJS
+      - WAHA_LOG_LEVEL=info
+    volumes:
+      - waha_sessions:/app/.sessions
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/server/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - bluemq-network
+    # Don't expose directly — only BlueMQ talks to WAHA
+    expose:
+      - "3000"
+
+  # ─────────────────────────────────────────────────────────────
+  # Redis (BullMQ Queue Backend)
+  # ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: bluemq-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bluemq-network
+    # Don't expose — only BlueMQ talks to Redis
+    expose:
+      - "6379"
+
+  # ─────────────────────────────────────────────────────────────
+  # Nginx (Reverse Proxy)
+  # ─────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: bluemq-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/certbot/conf:/etc/letsencrypt:ro
+      - ./nginx/certbot/www:/var/www/certbot:ro
+    depends_on:
+      bluemq:
+        condition: service_healthy
+    networks:
+      - bluemq-network
+
+  # ─────────────────────────────────────────────────────────────
+  # Certbot (SSL Certificate Management)
+  # ─────────────────────────────────────────────────────────────
+  certbot:
+    image: certbot/certbot
+    container_name: bluemq-certbot
+    volumes:
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - bluemq-network
+
+# ─────────────────────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────────────────────
+networks:
+  bluemq-network:
+    driver: bridge
+
+# ─────────────────────────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────────────────────────
+volumes:
+  waha_sessions:
+    driver: local
+  redis_data:
+    driver: local

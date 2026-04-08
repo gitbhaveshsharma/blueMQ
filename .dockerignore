@@ -1,0 +1,48 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Development files
+.editorconfig
+.eslintrc*
+.prettierrc*
+nodemon.json
+
+# Frontend (separate build)
+frontend
+
+# Logs
+logs
+*.log
+
+# WAHA (separate container)
+waha
+
+# Nginx configs (mounted separately)
+nginx
+
+# Scripts (not needed in container)
+scripts
+
+# Railway configs
+railway.json
+railway.toml

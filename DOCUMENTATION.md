@@ -23,7 +23,7 @@
    - [Mark as Read](#76-mark-as-read)
    - [Mark All as Read](#77-mark-all-as-read)
    - [Delivery Logs](#78-delivery-logs)
-   - [WhatsApp Session Management](#77-whatsapp-session-management)
+   - [WhatsApp Session Management](#79-whatsapp-session-management)
 8. [Template System](#8-template-system)
 9. [Notification Channels Explained](#9-notification-channels-explained)
 10. [Multi-Tenant Model](#10-multi-tenant-model)
@@ -723,11 +723,33 @@ GET /notifications/:notificationId/logs
 }
 ```
 
-### 7.7 WhatsApp Session Management
+### 7.9 WhatsApp Session Management
 
-These endpoints manage WAHA WhatsApp sessions. **Each entity (e.g. coaching centre, coach, branch) gets its own independent WAHA session with its own phone number.**
+BlueMQ supports **two WhatsApp providers** that can be used simultaneously — different entities can use different providers:
 
-#### WAHA Tier Compatibility
+| Provider                    | Connection Type | Setup Method              | Use Case                             |
+| --------------------------- | --------------- | ------------------------- | ------------------------------------ |
+| **WAHA** (default)          | `waha`          | QR code scanning          | Self-hosted, no Meta approval needed |
+| **Meta WhatsApp Cloud API** | `meta`          | API key + Phone Number ID | Official Meta API, higher throughput |
+
+Each entity (e.g. coaching centre, coach, branch) gets its own independent WhatsApp session with its own phone number.
+
+#### Choosing a Provider
+
+| Feature            | WAHA                | Meta Cloud API                      |
+| ------------------ | ------------------- | ----------------------------------- |
+| Setup complexity   | Lower (QR scan)     | Higher (Meta Business verification) |
+| Monthly cost       | WAHA license only   | Free tier + per-message fees        |
+| Message throughput | Good                | Very high                           |
+| Session stability  | Requires monitoring | Highly stable                       |
+| Template messages  | Not required        | Required for 24h+ window            |
+| Self-hosted        | Yes                 | No (Meta servers)                   |
+
+---
+
+#### WAHA Provider (Default)
+
+##### WAHA Tier Compatibility
 
 | Tier            | Sessions per App | Session Naming                   | Cost |
 | --------------- | ---------------- | -------------------------------- | ---- |
@@ -744,6 +766,59 @@ See [WAHA pricing](https://waha.devlike.pro/docs/how-to/plus-version/) for detai
 
 You never need to manage WAHA session names directly — they are resolved automatically.
 
+---
+
+#### Meta WhatsApp Cloud API Provider
+
+##### Prerequisites
+
+1. **Meta Business Account** — Create at [business.facebook.com](https://business.facebook.com)
+2. **WhatsApp Business API** — Set up at [Meta for Developers](https://developers.facebook.com/apps/)
+3. **Phone Number** — A phone number registered with Meta WhatsApp Business API
+4. **Permanent Access Token** — Generate from the Meta Developer Console
+
+##### Getting Meta API Credentials
+
+1. Go to [Meta for Developers](https://developers.facebook.com/apps/) and select your app
+2. Navigate to **WhatsApp** > **API Setup**
+3. Copy the **Phone Number ID** (e.g., `123456789012345`)
+4. Generate a **Permanent Access Token**:
+   - Go to **Business Settings** > **System Users**
+   - Create a system user with `whatsapp_business_messaging` permission
+   - Generate and copy the access token
+
+##### Creating a Meta WhatsApp Session
+
+```
+POST /whatsapp/sessions
+Headers: x-api-key: <your-api-key>
+Body: {
+  "entity_id": "coach_1",
+  "entity_name": "Coach Sharma",
+  "connection_type": "meta",
+  "meta_api_key": "EAABxxxx...your_permanent_access_token",
+  "meta_phone_number_id": "123456789012345",
+  "meta_business_account_id": "987654321"  // optional
+}
+```
+
+**Response `201`:**
+
+```json
+{
+  "success": true,
+  "connection_type": "meta",
+  "status": "active",
+  "entity_id": "coach_1",
+  "entity_name": "Coach Sharma",
+  "message": "Meta WhatsApp API configured successfully"
+}
+```
+
+**Key difference from WAHA:** Meta sessions become `active` immediately — no QR code scanning required.
+
+---
+
 #### List All Sessions
 
 ```
@@ -757,33 +832,45 @@ Query: ?status=active  (optional — filter by status)
 ```json
 {
   "success": true,
-  "count": 2,
+  "count": 3,
   "tier": "plus",
-  "tier_warning": "You have 2 sessions. Multiple concurrent sessions require WAHA Plus (paid).",
+  "tier_warning": "You have 3 sessions. Multiple concurrent sessions require WAHA Plus (paid).",
   "sessions": [
     {
       "entity_id": "coach_1",
       "waha_session": "default",
       "status": "active",
       "phone_number": "919876543210",
+      "connection_type": "waha",
       "connected_at": "2026-03-01T10:00:00.000Z",
       "disconnected_at": null,
       "created_at": "2026-03-01T09:55:00.000Z"
     },
     {
       "entity_id": "coach_2",
-      "waha_session": "tutrsy-coach-2",
-      "status": "pending",
+      "waha_session": "meta-tutrsy-coach-2",
+      "status": "active",
       "phone_number": null,
-      "connected_at": null,
+      "connection_type": "meta",
+      "connected_at": "2026-03-02T11:00:00.000Z",
       "disconnected_at": null,
       "created_at": "2026-03-02T11:00:00.000Z"
+    },
+    {
+      "entity_id": "coach_3",
+      "waha_session": "tutrsy-coach-3",
+      "status": "pending",
+      "phone_number": null,
+      "connection_type": "waha",
+      "connected_at": null,
+      "disconnected_at": null,
+      "created_at": "2026-03-03T12:00:00.000Z"
     }
   ]
 }
 ```
 
-#### Create / Re-create Session
+#### Create / Re-create Session (WAHA)
 
 ```
 POST /whatsapp/sessions
@@ -828,7 +915,7 @@ GET /whatsapp/sessions/:entity_id
 Headers: x-api-key: <your-api-key>
 ```
 
-**Response `200`:**
+**Response `200` (WAHA session):**
 
 ```json
 {
@@ -837,10 +924,30 @@ Headers: x-api-key: <your-api-key>
   "waha_session": "tutrsy-coach-1",
   "phone_number": "919876543210",
   "status": "active",
+  "connection_type": "waha",
   "qr_code": null,
   "connected_at": "2026-03-01T10:00:00.000Z"
 }
 ```
+
+**Response `200` (Meta session):**
+
+```json
+{
+  "success": true,
+  "entity_id": "coach_2",
+  "waha_session": "meta-tutrsy-coach-2",
+  "phone_number": null,
+  "status": "active",
+  "connection_type": "meta",
+  "meta_api_key": "...abc123",
+  "meta_phone_number_id": "123456789012345",
+  "meta_business_account_id": "987654321",
+  "connected_at": "2026-03-02T11:00:00.000Z"
+}
+```
+
+**Note:** The `meta_api_key` is masked for security — only the last 6 characters are shown.
 
 #### Send Test Message
 
@@ -853,12 +960,24 @@ Body: {
 }
 ```
 
-**Response `200`:**
+**Response `200` (WAHA):**
 
 ```json
 {
   "success": true,
-  "sent_to": "919876543210@c.us"
+  "sent_to": "919876543210@c.us",
+  "provider": "waha"
+}
+```
+
+**Response `200` (Meta):**
+
+```json
+{
+  "success": true,
+  "sent_to": "919876543210",
+  "provider": "meta-whatsapp",
+  "message_id": "wamid.HBgLNTU1NTU1NTU1FQIAERgSM..."
 }
 ```
 
@@ -877,6 +996,9 @@ Headers: x-api-key: <your-api-key>
 }
 ```
 
+For WAHA sessions, this logs out and stops the WAHA session.
+For Meta sessions, this marks the session as disconnected and clears the API key from the database.
+
 #### Webhook (WAHA → BlueMQ)
 
 ```
@@ -892,6 +1014,20 @@ WAHA status mappings:
 | `WORKING`                   | `active`       |
 | `FAILED` / `STOPPED`        | `disconnected` |
 | `STARTING` / `SCAN_QR_CODE` | `pending`      |
+
+---
+
+#### Meta WhatsApp Error Codes
+
+When sending via Meta WhatsApp Cloud API, you may encounter these errors:
+
+| Error Code                    | Meaning                         | Resolution                            |
+| ----------------------------- | ------------------------------- | ------------------------------------- |
+| `META_AUTH_FAILED`            | Invalid or expired access token | Regenerate the permanent access token |
+| `META_RECIPIENT_NOT_WHATSAPP` | Recipient not on WhatsApp       | Verify the phone number               |
+| `META_REENGAGEMENT_REQUIRED`  | 24h window expired              | Send a template message first         |
+| `META_RATE_LIMITED`           | Too many requests               | Implement exponential backoff         |
+| `META_FORBIDDEN`              | Permission denied               | Check phone number ID permissions     |
 
 ---
 
@@ -1043,13 +1179,38 @@ The worker throws an error when the provider returns `success: false`. BullMQ ca
 
 ### Current Provider Map
 
-| Channel    | Primary Provider  | Fallback           |
-| ---------- | ----------------- | ------------------ |
-| `push`     | OneSignal         | _(not configured)_ |
-| `email`    | OneSignal         | _(not configured)_ |
-| `sms`      | OneSignal         | _(not configured)_ |
-| `whatsapp` | WAHA (self-host)  | _(not configured)_ |
-| `inapp`    | InApp (DB direct) | —                  |
+| Channel    | Primary Provider                   | Fallback           |
+| ---------- | ---------------------------------- | ------------------ |
+| `push`     | OneSignal                          | _(not configured)_ |
+| `email`    | OneSignal                          | _(not configured)_ |
+| `sms`      | OneSignal                          | _(not configured)_ |
+| `whatsapp` | WAHA (self-host) or Meta Cloud API | _(not configured)_ |
+| `inapp`    | InApp (DB direct)                  | —                  |
+
+### WhatsApp Provider Selection
+
+Unlike other channels, WhatsApp supports **per-entity provider selection**:
+
+- Each entity (coaching center) can choose between **WAHA** or **Meta WhatsApp Cloud API**
+- The choice is stored in `whatsapp_sessions.connection_type` (`'waha'` or `'meta'`)
+- The worker reads the connection type and routes to the appropriate provider automatically
+
+**Provider file locations:**
+
+- WAHA: `src/providers/waha.provider.js`
+- Meta: `src/providers/meta-whatsapp.provider.js`
+
+**Helper function:**
+
+```javascript
+const { getWhatsAppProvider } = require("./providers/bootstrap");
+
+// Get WAHA provider
+const waha = getWhatsAppProvider("waha");
+
+// Get Meta provider
+const meta = getWhatsAppProvider("meta");
+```
 
 ### How the Registry Works
 
@@ -1123,20 +1284,28 @@ To swap a provider, you only change `src/providers/bootstrap.js`. Zero changes t
 
 ### `whatsapp_sessions` table
 
-| Column            | Type         | Description                                                 |
-| ----------------- | ------------ | ----------------------------------------------------------- |
-| `id`              | UUID         | Primary key                                                 |
-| `app_id`          | VARCHAR(64)  | FK → apps.app_id                                            |
-| `entity_id`       | VARCHAR(255) | Logical entity (e.g. coaching centre) that owns the session |
-| `waha_session`    | VARCHAR(255) | UNIQUE session name used in WAHA                            |
-| `phone_number`    | VARCHAR(20)  | WhatsApp phone number (populated once session is active)    |
-| `status`          | VARCHAR(32)  | `pending` / `active` / `disconnected` / `banned`            |
-| `qr_code`         | TEXT         | Base64 QR code for scanning (null once connected)           |
-| `connected_at`    | TIMESTAMPTZ  | When the session became active                              |
-| `disconnected_at` | TIMESTAMPTZ  | When the session was disconnected/logged out                |
-| `created_at`      | TIMESTAMPTZ  | When the session was created                                |
+| Column                     | Type         | Description                                                  |
+| -------------------------- | ------------ | ------------------------------------------------------------ |
+| `id`                       | UUID         | Primary key                                                  |
+| `app_id`                   | VARCHAR(64)  | FK → apps.app_id                                             |
+| `entity_id`                | VARCHAR(255) | Logical entity (e.g. coaching centre) that owns the session  |
+| `waha_session`             | VARCHAR(255) | Session name (WAHA name or Meta placeholder)                 |
+| `phone_number`             | VARCHAR(20)  | WhatsApp phone number (populated once session is active)     |
+| `status`                   | VARCHAR(32)  | `pending` / `active` / `disconnected` / `banned`             |
+| `qr_code`                  | TEXT         | Base64 QR code for scanning (null once connected, WAHA only) |
+| `connected_at`             | TIMESTAMPTZ  | When the session became active                               |
+| `disconnected_at`          | TIMESTAMPTZ  | When the session was disconnected/logged out                 |
+| `created_at`               | TIMESTAMPTZ  | When the session was created                                 |
+| `connection_type`          | VARCHAR(20)  | Provider type: `'waha'` (default) or `'meta'`                |
+| `meta_api_key`             | TEXT         | Meta WhatsApp permanent access token (per-coach, encrypted)  |
+| `meta_phone_number_id`     | VARCHAR(100) | Meta WhatsApp phone number ID from Business Manager          |
+| `meta_business_account_id` | VARCHAR(100) | Meta Business Account ID (optional, for reference)           |
 
-**Constraints:** `UNIQUE(app_id, entity_id)`. Partial index on `(app_id, entity_id) WHERE status = 'active'`.
+**Constraints:**
+
+- `UNIQUE(app_id, entity_id)`
+- `CHECK(connection_type IN ('waha', 'meta'))`
+- Partial index on `(app_id, entity_id) WHERE status = 'active'`
 
 ---
 
