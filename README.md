@@ -43,13 +43,21 @@ cp .env.example .env
 # Edit .env with your credentials
 ```
 
-### 4. Run migrations
+### 4. Test database connection (recommended)
+
+```bash
+npm run test:db
+```
+
+This verifies your `DATABASE_URL` is correct and the database is accessible. If it fails, see [DATABASE_CONNECTION_GUIDE.md](./DATABASE_CONNECTION_GUIDE.md).
+
+### 5. Run migrations
 
 ```bash
 npm run migrate
 ```
 
-### 5. Start
+### 6. Start
 
 ```bash
 # Development (auto-reload)
@@ -237,11 +245,46 @@ See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for a comprehensive guide covering:
 - PM2 process management
 - Monitoring and maintenance
 
-**Quick start:**
+**Deploying updates:**
 
 ```bash
-# On your droplet (as root)
-curl -fsSL https://raw.githubusercontent.com/gitbhaveshsharma/blueMQ/main/scripts/setup-droplet.sh | bash
+# On your droplet
+cd ~/blueMQ
+./scripts/deploy-droplet.sh
+```
+
+See [DEPLOY_DROPLET.md](./DEPLOY_DROPLET.md) for detailed deployment and troubleshooting steps.
+
+## Troubleshooting
+
+### Database Connection Issues
+
+If you see `ETIMEDOUT` or connection failures:
+
+1. **Test connection:** `npm run test:db`
+2. **Check configuration:** Verify `DATABASE_URL` in `.env`
+3. **Increase timeouts (for slow networks):**
+   ```bash
+   DB_CONNECTION_TIMEOUT_MS=60000
+   DB_MAX_RETRIES=5
+   DB_RETRY_DELAY_MS=3000
+   ```
+4. **See detailed guide:** [DATABASE_CONNECTION_GUIDE.md](./DATABASE_CONNECTION_GUIDE.md)
+
+### Quick Commands
+
+```bash
+# Test database connection
+npm run test:db
+
+# Run migrations
+npm run migrate
+
+# Start development server
+npm run dev
+
+# Start production server
+npm start
 ```
 
 ## Folder Structure
