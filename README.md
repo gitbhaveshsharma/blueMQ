@@ -105,6 +105,69 @@ Example architecture for crash isolation:
 
 If WhatsApp worker crashes, push/email/sms workers continue running.
 
+### 8. Redis High Availability (Sentinel / Cluster)
+
+BlueMQ supports three Redis modes via configuration only (no code changes):
+
+- `single`: one Redis endpoint (works with managed Redis failover endpoints)
+- `sentinel`: Redis Sentinel failover setup
+- `cluster`: Redis Cluster with multiple nodes
+
+Set mode:
+
+```bash
+REDIS_MODE=single
+```
+
+#### Single Mode (Managed Redis endpoint)
+
+Use this for DigitalOcean Managed Redis or Upstash endpoint URLs.
+
+```bash
+REDIS_MODE=single
+REDIS_URL=rediss://default:password@host:25061
+REDIS_TLS_ENABLED=true
+REDIS_TLS_REJECT_UNAUTHORIZED=true
+REDIS_DB=0
+```
+
+#### Sentinel Mode
+
+```bash
+REDIS_MODE=sentinel
+REDIS_SENTINELS=10.0.0.11:26379,10.0.0.12:26379,10.0.0.13:26379
+REDIS_SENTINEL_NAME=mymaster
+REDIS_USERNAME=
+REDIS_PASSWORD=
+REDIS_SENTINEL_USERNAME=
+REDIS_SENTINEL_PASSWORD=
+REDIS_TLS_ENABLED=false
+```
+
+#### Cluster Mode
+
+```bash
+REDIS_MODE=cluster
+REDIS_CLUSTER_NODES=10.0.0.21:6379,10.0.0.22:6379,10.0.0.23:6379
+REDIS_CLUSTER_SCALE_READS=master
+REDIS_CLUSTER_MAX_REDIRECTIONS=16
+REDIS_USERNAME=
+REDIS_PASSWORD=
+REDIS_TLS_ENABLED=false
+```
+
+Common Redis options:
+
+- `REDIS_CONNECT_TIMEOUT_MS` (default `10000`)
+- `REDIS_LAZY_CONNECT` (default `false`)
+- `REDIS_DB` (default `0`)
+
+Validation rules (startup fails fast):
+
+- Sentinel mode requires `REDIS_SENTINELS` and `REDIS_SENTINEL_NAME`
+- Cluster mode requires `REDIS_CLUSTER_NODES`
+- Invalid mode or malformed host:port lists are rejected at startup
+
 ## API Reference
 
 ### Health Check

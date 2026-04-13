@@ -1,5 +1,6 @@
 require("dotenv").config();
 const { buildProviderRouting } = require("./provider-routing");
+const { buildRedisConfig } = require("./redis-runtime");
 
 const config = {
   port: parseInt(process.env.PORT, 10) || 3001,
@@ -14,9 +15,7 @@ const config = {
   },
 
   // ─── Redis (BullMQ) ───
-  redis: {
-    url: process.env.REDIS_URL || "redis://localhost:6379",
-  },
+  redis: buildRedisConfig(),
 
   // ─── OneSignal ───
   onesignal: {
