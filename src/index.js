@@ -6,9 +6,10 @@ const morgan = require("morgan");
 const config = require("./config");
 const { migrate } = require("./db/migrate");
 const { createQueues } = require("./queues");
-const { startAllWorkers } = require("./workers");
+const { startWorkers } = require("./workers");
 const { bootstrapProviders } = require("./providers/bootstrap");
 const { authMiddleware } = require("./api/middlewares/auth");
+const { getProcessModeConfig } = require("./runtime/process-mode");
 
 // ─── Routes ───
 const healthRoutes = require("./api/routes/health");
@@ -19,24 +20,7 @@ const templatesRoutes = require("./api/routes/templates");
 const whatsappSessionsRoutes = require("./api/routes/whatsapp-sessions");
 const authRoutes = require("./api/routes/auth");
 
-async function main() {
-  console.log("═══════════════════════════════════════════");
-  console.log("  BlueMQ — Notification Service");
-  console.log("═══════════════════════════════════════════");
-
-  // ─── 1. Run DB migration ───
-  await migrate();
-
-  // ─── 2. Bootstrap providers ───
-  bootstrapProviders();
-
-  // ─── 3. Create BullMQ queues ───
-  createQueues();
-
-  // ─── 4. Start workers ───
-  startAllWorkers();
-
-  // ─── 5. Create Express app ───
+function createExpressApp() {
   const app = express();
 
   app.use(helmet());
@@ -44,6 +28,10 @@ async function main() {
   app.use(express.json({ limit: "1mb" }));
   app.use(morgan("short"));
 
+  return app;
+}
+
+function registerRoutes(app) {
   // ─── Public routes (no auth) ───
   app.use("/health", healthRoutes);
   app.use("/apps", appsRoutes);
@@ -58,7 +46,9 @@ async function main() {
   app.use("/notifications", authMiddleware, notificationsRoutes);
   app.use("/templates", authMiddleware, templatesRoutes);
   app.use("/whatsapp", authMiddleware, whatsappSessionsRoutes);
+}
 
+function registerHttpHandlers(app) {
   // ─── 404 ───
   app.use((_req, res) => {
     res.status(404).json({ error: "Not found" });
@@ -69,28 +59,82 @@ async function main() {
     console.error("[server] Unhandled error:", err);
     res.status(500).json({ error: "Internal server error" });
   });
+}
 
-  // ─── 6. Start listening ───
+function startApiServer() {
+  const app = createExpressApp();
+  registerRoutes(app);
+  registerHttpHandlers(app);
+
   app.listen(config.port, () => {
     console.log(`[server] Listening on port ${config.port}`);
     console.log("═══════════════════════════════════════════");
   });
 }
 
-// ─── Graceful shutdown ───
-process.on("SIGTERM", async () => {
-  console.log("[server] SIGTERM received, shutting down...");
-  const { closeRedis } = require("./queues/connection");
-  await closeRedis();
-  process.exit(0);
-});
+async function bootstrapByMode(runtime) {
+  if (runtime.runMigrations) {
+    await migrate();
+  }
 
-process.on("SIGINT", async () => {
-  console.log("[server] SIGINT received, shutting down...");
-  const { closeRedis } = require("./queues/connection");
-  await closeRedis();
-  process.exit(0);
-});
+  bootstrapProviders();
+
+  if (runtime.runApi) {
+    createQueues();
+  }
+
+  if (runtime.runWorkers) {
+    startWorkers(runtime.workerChannels);
+  }
+}
+
+async function closeRedisAndExit(signal) {
+  console.log(`[server] ${signal} received, shutting down...`);
+  try {
+    const { closeRedis } = require("./queues/connection");
+    await closeRedis();
+  } finally {
+    process.exit(0);
+  }
+}
+
+function registerShutdownHandlers() {
+  process.on("SIGTERM", () => closeRedisAndExit("SIGTERM"));
+  process.on("SIGINT", () => closeRedisAndExit("SIGINT"));
+}
+
+function registerProcessErrorHandlers() {
+  process.on("unhandledRejection", (reason) => {
+    console.error("[server] Unhandled promise rejection:", reason);
+  });
+
+  process.on("uncaughtException", (err) => {
+    console.error("[server] Uncaught exception:", err);
+    process.exit(1);
+  });
+}
+
+async function main() {
+  const runtime = getProcessModeConfig();
+
+  console.log("═══════════════════════════════════════════");
+  console.log("  BlueMQ — Notification Service");
+  console.log("═══════════════════════════════════════════");
+  console.log(
+    `[runtime] mode=${runtime.mode} workers=${runtime.workerChannels.join(",") || "none"}`,
+  );
+
+  await bootstrapByMode(runtime);
+
+  if (runtime.runApi) {
+    startApiServer();
+  } else {
+    console.log("[server] API disabled for worker-only process");
+  }
+}
+
+registerShutdownHandlers();
+registerProcessErrorHandlers();
 
 main().catch((err) => {
   console.error("[server] Fatal error:", err);

@@ -14,8 +14,8 @@ Client App  →  POST /notify  →  API Layer  →  BullMQ Queues  →  Workers 
 
 | Channel  | Provider               | Concurrency | Retries |
 | -------- | ---------------------- | ----------- | ------- |
-| Push     | OneSignal              | 10          | 3       |
-| Email    | OneSignal              | 5           | 3       |
+| Push     | OneSignal or Firebase  | 10          | 3       |
+| Email    | Resend or OneSignal    | 5           | 3       |
 | SMS      | OneSignal              | 5           | 5       |
 | WhatsApp | WAHA or Meta Cloud API | 5           | 5       |
 | In-App   | DB (direct)            | 20          | 2       |
@@ -66,6 +66,44 @@ npm run dev
 # Production
 npm start
 ```
+
+### 7. Separate Worker Processes (Recommended)
+
+BlueMQ now supports process modes for isolation:
+
+- `api` mode: runs only HTTP API
+- `worker` mode: runs only workers
+- `all` mode: runs API + workers (default)
+
+Run separate processes per channel:
+
+```bash
+# API only
+npm run start:api
+
+# All workers (no API)
+npm run start:worker
+
+# Single-channel worker process
+npm run start:worker -- --channels=push
+npm run start:worker -- --channels=whatsapp
+```
+
+Runtime options:
+
+- `--mode=api|worker|all` (or `PROCESS_MODE` env)
+- `--channels=push,email,sms,whatsapp,inapp` (or `WORKER_CHANNELS` env)
+
+Example architecture for crash isolation:
+
+- 1 API process: `--mode=api`
+- 1 Push worker: `--mode=worker --channels=push`
+- 1 Email worker: `--mode=worker --channels=email`
+- 1 SMS worker: `--mode=worker --channels=sms`
+- 1 WhatsApp worker: `--mode=worker --channels=whatsapp`
+- 1 In-app worker: `--mode=worker --channels=inapp`
+
+If WhatsApp worker crashes, push/email/sms workers continue running.
 
 ## API Reference
 
@@ -222,10 +260,25 @@ POST /whatsapp/sessions/webhook?secret=<WAHA_WEBHOOK_SECRET>
 
 ## Swapping Providers
 
-1. Create a new provider extending `INotificationProvider`
-2. Import it in `src/providers/bootstrap.js`
-3. Change one line: `registry.register('push', new FCMProvider())`
-4. Zero changes to workers, queues, or routes
+Provider selection is now config-driven and channel-specific.
+
+Set these env flags (exactly one `true` per configurable channel):
+
+```bash
+PROVIDER_PUSH_ONESIGNAL=false
+PROVIDER_PUSH_FIREBASE=true
+
+PROVIDER_EMAIL_ONESIGNAL=false
+PROVIDER_EMAIL_RESEND=true
+
+PROVIDER_SMS_ONESIGNAL=true
+```
+
+No worker, queue, or route changes are required when switching providers.
+
+### Push Payload Notes
+
+For Firebase push, include `user.fcm_token` (or `user.firebase_token`) in `/notify` payload.
 
 ## Deploy to Railway
 
@@ -244,6 +297,20 @@ See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for a comprehensive guide covering:
 - SSL/TLS with Let's Encrypt
 - PM2 process management
 - Monitoring and maintenance
+
+PM2 ecosystem for per-channel workers:
+
+```bash
+pm2 start ecosystem.config.js
+pm2 status
+```
+
+Optional: limit worker channels PM2 should create:
+
+```bash
+# Example: only push + whatsapp workers
+BLUEMQ_WORKER_CHANNELS=push,whatsapp pm2 start ecosystem.config.js
+```
 
 **Deploying updates:**
 

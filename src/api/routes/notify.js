@@ -27,7 +27,8 @@ const VALID_CHANNELS = ["push", "email", "sms", "whatsapp", "inapp"];
  *   user: {                                — delivery addresses
  *     email:               "rahul@gmail.com",
  *     phone:               "+91XXXXXXXXXX",
- *     onesignal_player_id: "abc-123"
+ *     onesignal_player_id: "abc-123",
+ *     fcm_token:           "fcm-device-token"
  *   },
  *   action_url:    "https://tutrsy.com/fees",
  *   data:          { fee_id: "fee_456" }   — extra payload (optional)

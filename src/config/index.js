@@ -1,4 +1,5 @@
 require("dotenv").config();
+const { buildProviderRouting } = require("./provider-routing");
 
 const config = {
   port: parseInt(process.env.PORT, 10) || 3001,
@@ -21,6 +22,14 @@ const config = {
   onesignal: {
     appId: process.env.ONESIGNAL_APP_ID,
     apiKey: process.env.ONESIGNAL_API_KEY,
+  },
+
+  // ─── Firebase Cloud Messaging (Push) ───
+  firebase: {
+    serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "",
+    projectId: process.env.FIREBASE_PROJECT_ID || "",
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
   },
 
   // ─── WAHA (WhatsApp — self-hosted via Railway private network) ───
@@ -80,6 +89,9 @@ const config = {
     whatsapp: "notifications-whatsapp",
     inapp: "notifications-inapp",
   },
+
+  // ─── Provider Routing ───
+  providers: buildProviderRouting(),
 };
 
 module.exports = config;

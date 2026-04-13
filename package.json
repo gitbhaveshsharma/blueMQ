@@ -5,7 +5,11 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "start:api": "node src/index.js --mode=api",
+    "start:worker": "node src/index.js --mode=worker",
     "dev": "nodemon src/index.js",
+    "dev:api": "nodemon src/index.js --mode=api",
+    "dev:worker": "nodemon src/index.js --mode=worker",
     "migrate": "node src/db/migrate.js",
     "test:db": "node scripts/test-db-connection.js",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -28,6 +32,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "firebase-admin": "^13.8.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.9.3",
     "morgan": "^1.10.1",

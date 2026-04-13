@@ -37,7 +37,7 @@ class INotificationProvider {
    * @param {string} payload.body
    * @param {string} payload.actionUrl
    * @param {string} payload.ctaText
-   * @param {object} payload.user          — { onesignal_player_id, email, phone, ... }
+   * @param {object} payload.user          — { onesignal_player_id, fcm_token, email, phone, ... }
    * @param {object} [payload.data]        — arbitrary extra data
    * @returns {Promise<{success:boolean, providerMessageId?:string, error?:string}>}
    */

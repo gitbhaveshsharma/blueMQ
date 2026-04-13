@@ -1,11 +1,14 @@
 /**
  * Bootstrap the provider registry — wire up channel → provider mappings.
  *
- * To swap a provider in future:
- *   1. Create new provider extending INotificationProvider
- *   2. Import it here
- *   3. Change one line: registry.register('push', new FCMProvider());
- *   4. Zero changes to workers, queues, or routes
+ * Provider selection for push/email/sms is config-driven:
+ *   - src/config/provider-routing.js
+ *   - env flags: PROVIDER_* (e.g. PROVIDER_PUSH_FIREBASE=true)
+ *
+ * To add a new provider in future:
+ *   1. Create provider extending INotificationProvider
+ *   2. Add a factory here
+ *   3. Add channel flag in provider-routing config
  *
  * WhatsApp supports two providers:
  *   - WAHA (default): Self-hosted, uses QR code scanning
@@ -16,7 +19,10 @@
  */
 
 const { registry } = require("./registry");
+const config = require("../config");
 const { OneSignalProvider } = require("./onesignal.provider");
+const { FirebaseProvider } = require("./firebase.provider");
+const { ResendProvider } = require("./resend.provider");
 const { WahaProvider } = require("./waha.provider");
 const { MetaWhatsAppProvider } = require("./meta-whatsapp.provider");
 const { InAppProvider } = require("./inapp.provider");
@@ -25,23 +31,46 @@ const { InAppProvider } = require("./inapp.provider");
 let wahaProvider = null;
 let metaWhatsAppProvider = null;
 
+function createProviderFactories() {
+  const cache = {};
+
+  return {
+    onesignal: () => (cache.onesignal ||= new OneSignalProvider()),
+    firebase: () => (cache.firebase ||= new FirebaseProvider()),
+    resend: () => (cache.resend ||= new ResendProvider()),
+    inapp: () => (cache.inapp ||= new InAppProvider()),
+    waha: () => (cache.waha ||= new WahaProvider()),
+    meta: () => (cache.meta ||= new MetaWhatsAppProvider()),
+  };
+}
+
+function registerPrimaryChannel(channel, providerName, factories) {
+  const factory = factories[providerName];
+  if (!factory) {
+    throw new Error(
+      `[providers] Unknown provider "${providerName}" configured for channel "${channel}"`,
+    );
+  }
+  registry.register(channel, factory());
+}
+
 function bootstrapProviders() {
-  const onesignal = new OneSignalProvider();
-  wahaProvider = new WahaProvider();
-  metaWhatsAppProvider = new MetaWhatsAppProvider();
-  const inapp = new InAppProvider();
+  const factories = createProviderFactories();
+  const primary = config.providers.primary;
 
-  // ─── Primary Providers ───
-  registry.register("push", onesignal);
-  registry.register("email", onesignal);
-  registry.register("sms", onesignal);
-  registry.register("whatsapp", wahaProvider); // Default WhatsApp provider is WAHA
-  registry.register("inapp", inapp);
+  registerPrimaryChannel("push", primary.push, factories);
+  registerPrimaryChannel("email", primary.email, factories);
+  registerPrimaryChannel("sms", primary.sms, factories);
+  registerPrimaryChannel("inapp", primary.inapp, factories);
 
-  // ─── Fallbacks (uncomment when ready) ───
-  // registry.registerFallback('push',  new FCMProvider());
-  // registry.registerFallback('email', new SendGridProvider());
-  // registry.registerFallback('sms',   new MSG91Provider());
+  wahaProvider = factories.waha();
+  metaWhatsAppProvider = factories.meta();
+  registry.register("whatsapp", wahaProvider);
+
+  console.log(
+    "[providers] Routing config:",
+    JSON.stringify(config.providers.primary),
+  );
 
   console.log(
     "[providers] Registry initialised:",
