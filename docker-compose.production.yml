@@ -9,8 +9,6 @@
 #
 # Note: PostgreSQL is external (Neon) — not included here.
 
-version: "3.9"
-
 services:
   # ─────────────────────────────────────────────────────────────
   # BlueMQ API
@@ -67,14 +65,18 @@ services:
     restart: unless-stopped
     environment:
       - WHATSAPP_API_KEY=${WAHA_API_KEY}
-      - WHATSAPP_HOOK_URL=${BASE_URL}/whatsapp/sessions/webhook?secret=${WAHA_WEBHOOK_SECRET}
+      - WHATSAPP_HOOK_URL=${WHATSAPP_HOOK_URL:-${BASE_URL:-http://bluemq:3001}/whatsapp/sessions/webhook?secret=${WAHA_WEBHOOK_SECRET:-dev-webhook-secret}}
       - WHATSAPP_HOOK_EVENTS=session.status
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
       - WAHA_LOG_LEVEL=info
     volumes:
       - waha_sessions:/app/.sessions
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/server/status"]
+      test:
+        [
+          "CMD-SHELL",
+          'curl -fsS -H "X-Api-Key: $$WHATSAPP_API_KEY" http://localhost:3000/api/server/status >/dev/null || exit 1',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

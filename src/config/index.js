@@ -36,6 +36,15 @@ const config = {
     baseUrl: process.env.WAHA_BASE_URL || "http://localhost:3000",
     apiKey: process.env.WAHA_API_KEY || "",
     webhookSecret: process.env.WAHA_WEBHOOK_SECRET || "",
+    requestTimeoutMs:
+      parseInt(process.env.WAHA_REQUEST_TIMEOUT_MS, 10) || 30000,
+    stateTimeoutMs: parseInt(process.env.WAHA_STATE_TIMEOUT_MS, 10) || 3500,
+    qrTimeoutMs: parseInt(process.env.WAHA_QR_TIMEOUT_MS, 10) || 5000,
+    writeTimeoutMs: parseInt(process.env.WAHA_WRITE_TIMEOUT_MS, 10) || 15000,
+    pollAttempts: parseInt(process.env.WAHA_POLL_ATTEMPTS, 10) || 15,
+    pollDelayMs: parseInt(process.env.WAHA_POLL_DELAY_MS, 10) || 2000,
+    reconcileCooldownMs:
+      parseInt(process.env.WAHA_RECONCILE_COOLDOWN_MS, 10) || 8000,
   },
 
   // ─── Resend (OTP emails) ───

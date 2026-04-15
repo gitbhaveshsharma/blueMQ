@@ -54,7 +54,7 @@ class WahaProvider extends INotificationProvider {
     try {
       const res = await axios.post(`${this.baseUrl}/api/sendText`, reqBody, {
         headers: this._headers(),
-        timeout: 30000,
+        timeout: config.waha.requestTimeoutMs,
       });
 
       return {

@@ -11,7 +11,45 @@ const WAHA_HEADERS = {
   ...(config.waha.apiKey ? { "X-Api-Key": config.waha.apiKey } : {}),
 };
 
+const WAHA_STATE_TIMEOUT_MS = config.waha.stateTimeoutMs;
+const WAHA_QR_TIMEOUT_MS = config.waha.qrTimeoutMs;
+const WAHA_WRITE_TIMEOUT_MS = config.waha.writeTimeoutMs;
+const WAHA_POLL_ATTEMPTS = config.waha.pollAttempts;
+const WAHA_POLL_DELAY_MS = config.waha.pollDelayMs;
+const WAHA_RECONCILE_COOLDOWN_MS = config.waha.reconcileCooldownMs;
+
+const wahaErrorLogTs = new Map();
+const lastReconcileTs = new Map();
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isWahaConnectivityError(err) {
+  return (
+    err?.code === "ECONNREFUSED" ||
+    err?.code === "ENOTFOUND" ||
+    err?.code === "ETIMEDOUT" ||
+    err?.code === "ECONNABORTED"
+  );
+}
+
+function logWahaWarn(key, message, throttleMs = 30000) {
+  const now = Date.now();
+  const lastTs = wahaErrorLogTs.get(key) || 0;
+  if (now - lastTs >= throttleMs) {
+    console.warn(message);
+    wahaErrorLogTs.set(key, now);
+  }
+}
+
+function shouldReconcileNow(sessionName) {
+  const now = Date.now();
+  const lastTs = lastReconcileTs.get(sessionName) || 0;
+  if (now - lastTs < WAHA_RECONCILE_COOLDOWN_MS) {
+    return false;
+  }
+  lastReconcileTs.set(sessionName, now);
+  return true;
+}
 
 /**
  * The default WAHA session name.
@@ -111,65 +149,71 @@ function sanitizeQr(qr) {
 
 /**
  * Get the current WAHA session state.
- * Tries GET /api/sessions (list) first, then GET /api/sessions/:name as fallback.
+ * Tries GET /api/sessions/:name first, then GET /api/sessions as fallback.
  * Returns status string (STARTING, SCAN_QR_CODE, WORKING, STOPPED, FAILED)
- * or "NOT_FOUND" / null (unreachable).
+ * or "NOT_FOUND" / "UNREACHABLE".
  */
 async function getWahaSessionState(sessionName) {
-  // Method 1: List all sessions
+  let connectivityError = false;
+
+  // Method 1 (preferred): direct session endpoint
+  try {
+    const res = await axios.get(`${WAHA_BASE}/api/sessions/${sessionName}`, {
+      headers: WAHA_HEADERS,
+      timeout: WAHA_STATE_TIMEOUT_MS,
+    });
+    const status =
+      res.data?.status || res.data?.state || res.data?.session?.status || null;
+    if (status) return status;
+  } catch (err) {
+    if (err.response?.status === 404) {
+      return "NOT_FOUND";
+    }
+    if (isWahaConnectivityError(err)) {
+      connectivityError = true;
+      logWahaWarn(
+        "state-direct-connectivity",
+        `[waha-debug] GET /api/sessions/${sessionName} failed: ${err.message}`,
+      );
+    }
+  }
+
+  // Method 2 (fallback): list sessions (older WAHA variants)
   try {
     const res = await axios.get(`${WAHA_BASE}/api/sessions`, {
       headers: WAHA_HEADERS,
-      timeout: 10000,
+      timeout: WAHA_STATE_TIMEOUT_MS,
     });
     const data = res.data;
-    const sessions = Array.isArray(data) ? data : [];
-
-    // Debug: log what WAHA actually returns (first call only)
-    if (!getWahaSessionState._logged) {
-      console.log(
-        `[waha-debug] GET /api/sessions response (type=${typeof data}, isArray=${Array.isArray(data)}, length=${sessions.length}):`,
-        JSON.stringify(data).slice(0, 500),
-      );
-      getWahaSessionState._logged = true;
-    }
-
-    // Try multiple property names — WAHA versions differ
+    const sessions = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.sessions)
+        ? data.sessions
+        : [];
     const found = sessions.find(
       (s) =>
         s.name === sessionName ||
         s.session === sessionName ||
         s.id === sessionName,
     );
-    if (found) {
-      const status = found.status || found.state || "UNKNOWN";
-      return status;
+    if (!found) {
+      return "NOT_FOUND";
     }
-  } catch (err) {
-    console.warn(
-      `[waha-debug] GET /api/sessions failed: ${err.response?.status || err.message}`,
-    );
-  }
-
-  // Method 2: Direct session endpoint (works in some WAHA versions)
-  try {
-    const res = await axios.get(`${WAHA_BASE}/api/sessions/${sessionName}`, {
-      headers: WAHA_HEADERS,
-      timeout: 10000,
-    });
-    const status = res.data?.status || res.data?.state || null;
-    if (status) {
-      console.log(`[waha-debug] GET /api/sessions/${sessionName} → ${status}`);
-      return status;
-    }
+    return found.status || found.state || "UNKNOWN";
   } catch (err) {
     if (err.response?.status === 404) {
       return "NOT_FOUND";
     }
-    // Other errors — WAHA may be unreachable
+    if (isWahaConnectivityError(err)) {
+      connectivityError = true;
+      logWahaWarn(
+        "state-list-connectivity",
+        `[waha-debug] GET /api/sessions failed: ${err.message}`,
+      );
+    }
   }
 
-  return "NOT_FOUND";
+  return connectivityError ? "UNREACHABLE" : "NOT_FOUND";
 }
 
 /**
@@ -182,7 +226,7 @@ async function fetchQrCode(sessionName) {
     // U+FFFD replacement characters, producing an invalid data URI.
     const res = await axios.get(`${WAHA_BASE}/api/${sessionName}/auth/qr`, {
       headers: WAHA_HEADERS,
-      timeout: 10000,
+      timeout: WAHA_QR_TIMEOUT_MS,
       responseType: "arraybuffer",
     });
 
@@ -190,7 +234,13 @@ async function fetchQrCode(sessionName) {
 
     if (contentType.includes("application/json")) {
       // WAHA returned JSON — parse and extract the value field
-      const json = JSON.parse(Buffer.from(res.data).toString("utf8"));
+      const raw = Buffer.from(res.data).toString("utf8");
+      let json;
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        return null;
+      }
       const val = json?.value || null;
       if (!val) return null;
       // Already a data URI (some WAHA versions) — return as-is
@@ -206,7 +256,13 @@ async function fetchQrCode(sessionName) {
       : "image/png";
     const base64 = Buffer.from(res.data).toString("base64");
     return `data:${mime};base64,${base64}`;
-  } catch {
+  } catch (err) {
+    if (isWahaConnectivityError(err)) {
+      logWahaWarn(
+        "qr-connectivity",
+        `[waha-debug] GET /api/${sessionName}/auth/qr failed: ${err.message}`,
+      );
+    }
     return null;
   }
 }
@@ -362,6 +418,13 @@ router.post("/sessions", async (req, res) => {
     const currentState = await getWahaSessionState(sessionName);
     console.log(`[whatsapp-sessions] Current WAHA state: ${currentState}`);
 
+    if (currentState === "UNREACHABLE") {
+      return res.status(503).json({
+        error:
+          "WAHA is temporarily unreachable. Please check WAHA service health and retry.",
+      });
+    }
+
     if (currentState === "NOT_FOUND" || !currentState) {
       // Session doesn't exist — create it
       try {
@@ -373,7 +436,7 @@ router.post("/sessions", async (req, res) => {
               webhooks: [{ url: webhookUrl, events: ["session.status"] }],
             },
           },
-          { headers: WAHA_HEADERS, timeout: 15000 },
+          { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
         );
         console.log(
           `[whatsapp-sessions] Created WAHA session '${sessionName}' — response:`,
@@ -396,17 +459,13 @@ router.post("/sessions", async (req, res) => {
       }
     }
 
-    if (
-      currentState === "STOPPED" ||
-      currentState === "FAILED" ||
-      currentState === "WORKING"
-    ) {
+    if (currentState === "STOPPED" || currentState === "FAILED") {
       // Restart the session to get a fresh QR
       try {
         await axios.post(
           `${WAHA_BASE}/api/sessions/${sessionName}/restart`,
           {},
-          { headers: WAHA_HEADERS, timeout: 15000 },
+          { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
         );
         console.log(`[whatsapp-sessions] Restarted WAHA session`);
       } catch (err) {
@@ -416,7 +475,7 @@ router.post("/sessions", async (req, res) => {
           await axios.post(
             `${WAHA_BASE}/api/sessions/${sessionName}/stop`,
             {},
-            { headers: WAHA_HEADERS, timeout: 10000 },
+            { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
           );
         } catch {
           /* ignore */
@@ -425,7 +484,7 @@ router.post("/sessions", async (req, res) => {
           await axios.post(
             `${WAHA_BASE}/api/sessions`,
             { name: sessionName },
-            { headers: WAHA_HEADERS, timeout: 15000 },
+            { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
           );
           console.log(`[whatsapp-sessions] Recreated session after stop`);
         } catch {
@@ -436,21 +495,21 @@ router.post("/sessions", async (req, res) => {
 
     // If already in SCAN_QR_CODE, skip waiting for state and fetch QR directly
 
-    // ── Step 2: Poll state until SCAN_QR_CODE, then fetch QR (up to 30 s) ──
+    // ── Step 2: Poll state until SCAN_QR_CODE, then fetch QR ──
     let qrCode = null;
     let consecutiveNotFound = 0;
 
-    for (let attempt = 1; attempt <= 15; attempt++) {
-      await sleep(2000);
+    for (let attempt = 1; attempt <= WAHA_POLL_ATTEMPTS; attempt++) {
+      await sleep(WAHA_POLL_DELAY_MS);
 
-      const state = await getWahaSessionState(sessionName);
-
-      // Also try fetching QR directly — some WAHA versions don't list
-      // sessions correctly but still serve the QR endpoint
-      const directQr = await fetchQrCode(sessionName);
+      // Query WAHA state + QR in parallel to keep each attempt bounded.
+      const [state, directQr] = await Promise.all([
+        getWahaSessionState(sessionName),
+        fetchQrCode(sessionName),
+      ]);
 
       console.log(
-        `[whatsapp-sessions] Poll ${attempt}/15: state=${state}, qr=${directQr ? `yes(${String(directQr).length}ch)` : "no"}`,
+        `[whatsapp-sessions] Poll ${attempt}/${WAHA_POLL_ATTEMPTS}: state=${state}, qr=${directQr ? `yes(${String(directQr).length}ch)` : "no"}`,
       );
 
       if (directQr) {
@@ -459,6 +518,10 @@ router.post("/sessions", async (req, res) => {
           `[whatsapp-sessions] ✅ QR obtained on attempt ${attempt} (${String(qrCode).length} chars)`,
         );
         break;
+      }
+
+      if (state === "UNREACHABLE") {
+        continue;
       }
 
       if (state === "NOT_FOUND") {
@@ -472,7 +535,7 @@ router.post("/sessions", async (req, res) => {
             await axios.post(
               `${WAHA_BASE}/api/sessions`,
               { name: sessionName, start: true },
-              { headers: WAHA_HEADERS, timeout: 15000 },
+              { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
             );
             console.log(`[whatsapp-sessions] Re-created session`);
           } catch {
@@ -481,7 +544,7 @@ router.post("/sessions", async (req, res) => {
               await axios.post(
                 `${WAHA_BASE}/api/sessions/${sessionName}/start`,
                 {},
-                { headers: WAHA_HEADERS, timeout: 15000 },
+                { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
               );
               console.log(`[whatsapp-sessions] Started session explicitly`);
             } catch {
@@ -663,8 +726,12 @@ router.get("/sessions/:entity_id", async (req, res) => {
       session.status === "pending" ||
       (session.status === "active" && !session.phone_number);
 
-    if (needsReconcile) {
+    if (needsReconcile && shouldReconcileNow(session.waha_session)) {
       const wahaState = await getWahaSessionState(session.waha_session);
+
+      if (wahaState === "UNREACHABLE") {
+        result.waha_state = "UNREACHABLE";
+      }
 
       if (wahaState === "WORKING") {
         // ── Authenticated — mark active + fetch phone number ──
@@ -677,7 +744,7 @@ router.get("/sessions/:entity_id", async (req, res) => {
         try {
           const info = await axios.get(
             `${WAHA_BASE}/api/sessions/${session.waha_session}`,
-            { headers: WAHA_HEADERS, timeout: 10000 },
+            { headers: WAHA_HEADERS, timeout: WAHA_STATE_TIMEOUT_MS },
           );
           phoneNumber = info.data?.me?.id?.replace("@c.us", "") || null;
         } catch {
@@ -710,7 +777,7 @@ router.get("/sessions/:entity_id", async (req, res) => {
             UPDATE whatsapp_sessions SET status = 'disconnected', disconnected_at = now()
             WHERE app_id = ${appId} AND entity_id = ${entity_id}
           `.catch(() => {});
-        } else {
+        } else if (wahaState !== "UNREACHABLE") {
           // STARTING — try fetching QR optimistically
           const freshQr = await fetchQrCode(session.waha_session);
           if (freshQr) {
@@ -763,7 +830,7 @@ router.delete("/sessions/:entity_id", async (req, res) => {
         await axios.post(
           `${WAHA_BASE}/api/sessions/${sessionName}/logout`,
           {},
-          { headers: WAHA_HEADERS, timeout: 10000 },
+          { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
         );
       } catch (err) {
         console.warn("[whatsapp-sessions] Logout warning:", err.message);
@@ -773,7 +840,7 @@ router.delete("/sessions/:entity_id", async (req, res) => {
       try {
         await axios.delete(`${WAHA_BASE}/api/sessions/${sessionName}`, {
           headers: WAHA_HEADERS,
-          timeout: 10000,
+          timeout: WAHA_WRITE_TIMEOUT_MS,
         });
       } catch (err) {
         console.warn(
@@ -895,7 +962,7 @@ router.post("/sessions/:entity_id/test-message", async (req, res) => {
       await axios.post(
         `${WAHA_BASE}/api/sendText`,
         { chatId, text, session: sessionName },
-        { headers: WAHA_HEADERS, timeout: 15000 },
+        { headers: WAHA_HEADERS, timeout: WAHA_WRITE_TIMEOUT_MS },
       );
 
       console.log(
@@ -982,7 +1049,7 @@ async function handleWebhook(req, res) {
       try {
         const info = await axios.get(
           `${WAHA_BASE}/api/sessions/${sessionName}`,
-          { headers: WAHA_HEADERS, timeout: 10000 },
+          { headers: WAHA_HEADERS, timeout: WAHA_STATE_TIMEOUT_MS },
         );
         const phoneNumber = info.data?.me?.id?.replace("@c.us", "") || null;
         if (phoneNumber) {

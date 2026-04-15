@@ -173,7 +173,7 @@ cp .env.example .env
 # Edit .env — set WHATSAPP_API_KEY and WHATSAPP_HOOK_URL
 
 # 3. Start WAHA
-docker-compose up -d
+docker-compose --env-file ../.env up -d
 
 # 4. WAHA is now running at http://localhost:3000
 # 5. Open dashboard: http://localhost:3000/dashboard
