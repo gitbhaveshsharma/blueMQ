@@ -46,7 +46,7 @@ async function migrate() {
   for (let i = 0; i < statements.length; i++) {
     const statement = statements[i];
     try {
-      // getDb() returns a pg Pool, so execute raw SQL via pool.query().
+      // getDb() exposes db.query() for raw SQL execution.
       await executeWithRetry(() => db.query(statement));
 
       // Log progress for long migrations

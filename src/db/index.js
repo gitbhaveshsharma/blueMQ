@@ -2,6 +2,7 @@ const { Pool } = require("pg");
 const config = require("../config");
 
 let pool;
+let sqlClient;
 
 // Categorise errors so callers can react appropriately
 const ErrorType = {
@@ -56,6 +57,43 @@ class DbError extends Error {
   }
 }
 
+function buildTaggedQuery(strings, values) {
+  let text = "";
+  const params = [];
+
+  for (let i = 0; i < strings.length; i++) {
+    text += strings[i];
+    if (i < values.length) {
+      params.push(values[i]);
+      text += `$${params.length}`;
+    }
+  }
+
+  return { text, params };
+}
+
+function createSqlClient(poolRef) {
+  const sql = async (strings, ...values) => {
+    if (
+      !Array.isArray(strings) ||
+      !Object.prototype.hasOwnProperty.call(strings, "raw")
+    ) {
+      throw new TypeError("sql must be used as a tagged template literal");
+    }
+
+    const { text, params } = buildTaggedQuery(strings, values);
+    const result = await executeWithRetry(() => poolRef.query(text, params));
+    return result.rows;
+  };
+
+  // Keep raw query support for migration and health checks.
+  sql.query = (text, params = []) =>
+    executeWithRetry(() => poolRef.query(text, params));
+  sql.raw = poolRef;
+
+  return sql;
+}
+
 function getDb() {
   if (!pool) {
     if (!config.database.url) {
@@ -82,8 +120,10 @@ function getDb() {
     pool.on("connect", () => {
       console.log("[db] New client connected to pool");
     });
+
+    sqlClient = createSqlClient(pool);
   }
-  return pool;
+  return sqlClient;
 }
 
 async function executeWithRetry(
@@ -186,6 +226,7 @@ async function closePool() {
     console.log("[db] Closing connection pool...");
     await pool.end();
     pool = null;
+    sqlClient = null;
     console.log("[db] Pool closed");
   }
 }
