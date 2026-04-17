@@ -127,9 +127,22 @@ class ApiClient {
   }
 
   // ── WhatsApp Sessions ──
-  createWhatsAppSession(entityId, entityName) {
+  createWhatsAppSession({
+    entityId,
+    entityName,
+    metaApiKey,
+    metaPhoneNumberId,
+    metaBusinessAccountId,
+  }) {
     return this.#request("POST", "/whatsapp/sessions", {
-      body: { entity_id: entityId, entity_name: entityName },
+      body: {
+        entity_id: entityId,
+        entity_name: entityName,
+        connection_type: "meta",
+        meta_api_key: metaApiKey,
+        meta_phone_number_id: metaPhoneNumberId,
+        meta_business_account_id: metaBusinessAccountId,
+      },
     });
   }
 

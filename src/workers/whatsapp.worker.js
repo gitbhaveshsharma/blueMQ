@@ -1,16 +1,11 @@
 const { Worker } = require("bullmq");
 const { getRedisConnection } = require("../queues/connection");
-const { registry } = require("../providers/registry");
 const { getWhatsAppProvider } = require("../providers/bootstrap");
 const { getDb } = require("../db");
 const config = require("../config");
 
 /**
  * WhatsApp worker — custom logic on top of the base pattern.
- *
- * Supports two connection types:
- *   - 'waha' (default): Uses WAHA provider with session name
- *   - 'meta': Uses Meta WhatsApp Cloud API with API credentials
  *
  * Before calling the provider, we look up the active WhatsApp session
  * for the (appId + entityId) pair.  If no active session exists the job is
@@ -46,7 +41,7 @@ function createWhatsAppWorker() {
 
       // ─── 1. Lookup active WhatsApp session for this entity ───
       const [session] = await sql`
-        SELECT waha_session, connection_type, meta_api_key, meta_phone_number_id
+        SELECT connection_type, meta_api_key, meta_phone_number_id
         FROM whatsapp_sessions
         WHERE app_id    = ${appId}
           AND entity_id = ${entityId || ""}
@@ -79,50 +74,48 @@ function createWhatsAppWorker() {
         return;
       }
 
-      // ─── 2. Determine connection type and send via appropriate provider ───
-      const connectionType = session.connection_type || "waha";
-      let result;
+      // ─── 2. Send via Meta WhatsApp Cloud API only ───
+      const connectionType = session.connection_type || "meta";
+      if (connectionType !== "meta") {
+        const reason = `Unsupported WhatsApp connection_type "${connectionType}"`;
 
-      if (connectionType === "meta") {
-        // ─── Meta WhatsApp Cloud API ───
-        const metaProvider = getWhatsAppProvider("meta");
+        await sql`
+          INSERT INTO notification_logs
+            (notification_id, channel, status, provider, error, attempt_number)
+          VALUES
+            (${notificationId}, ${channel}, 'failed', 'meta-whatsapp', ${reason}, ${attemptNumber})
+        `;
 
-        const metaPayload = {
-          notificationId,
-          title,
-          body,
-          ctaText,
-          user,
-          actionUrl,
-          data,
-          // Meta-specific credentials from session
-          metaApiKey: session.meta_api_key,
-          metaPhoneNumberId: session.meta_phone_number_id,
-        };
+        await sql`
+          UPDATE notifications
+          SET status = 'failed'
+          WHERE id = ${notificationId}
+            AND status != 'delivered'
+        `;
 
-        console.log(
-          `[whatsapp] Using Meta provider for ${notificationId} (entity: ${entityId})`,
-        );
-        result = await metaProvider.sendWhatsApp(metaPayload);
-        result.provider = metaProvider.name;
-      } else {
-        // ─── WAHA (default) ───
-        const wahaPayload = {
-          notificationId,
-          title,
-          body,
-          ctaText,
-          user,
-          actionUrl,
-          data,
-          session: session.waha_session,
-        };
-
-        console.log(
-          `[whatsapp] Using WAHA provider for ${notificationId} (session: ${session.waha_session})`,
-        );
-        result = await registry.send(channel, wahaPayload);
+        return;
       }
+
+      const metaProvider = getWhatsAppProvider();
+
+      const metaPayload = {
+        notificationId,
+        title,
+        body,
+        ctaText,
+        user,
+        actionUrl,
+        data,
+        metaApiKey: session.meta_api_key,
+        metaPhoneNumberId: session.meta_phone_number_id,
+      };
+
+      console.log(
+        `[whatsapp] Using Meta provider for ${notificationId} (entity: ${entityId})`,
+      );
+
+      const result = await metaProvider.sendWhatsApp(metaPayload);
+      result.provider = metaProvider.name;
 
       // ─── 3. Log result ───
       if (result.success) {
@@ -151,12 +144,12 @@ function createWhatsAppWorker() {
           INSERT INTO notification_logs
             (notification_id, channel, status, provider, error, attempt_number)
           VALUES
-            (${notificationId}, ${channel}, 'failed', ${result.provider || connectionType}, ${result.error || "Unknown error"}, ${attemptNumber})
+            (${notificationId}, ${channel}, 'failed', ${result.provider || "meta-whatsapp"}, ${result.error || "Unknown error"}, ${attemptNumber})
         `;
 
         throw new Error(
           result.error ||
-            `${connectionType} provider returned failure for whatsapp`,
+            "meta-whatsapp provider returned failure for whatsapp",
         );
       }
     },
@@ -182,27 +175,11 @@ function createWhatsAppWorker() {
       try {
         const sql = getDb();
 
-        // Determine provider from job data if possible
-        const entityId = job.data.entityId;
-        let providerName = "unknown";
-
-        try {
-          const [session] = await sql`
-            SELECT connection_type FROM whatsapp_sessions
-            WHERE app_id = ${job.data.appId} AND entity_id = ${entityId || ""}
-            LIMIT 1
-          `;
-          providerName =
-            session?.connection_type === "meta" ? "meta-whatsapp" : "waha";
-        } catch {
-          // Ignore lookup errors
-        }
-
         await sql`
           INSERT INTO notification_logs
             (notification_id, channel, status, provider, error, attempt_number)
           VALUES
-            (${job.data.notificationId}, ${channel}, 'permanently_failed', ${providerName}, ${err.message}, ${job.attemptsMade})
+            (${job.data.notificationId}, ${channel}, 'permanently_failed', 'meta-whatsapp', ${err.message}, ${job.attemptsMade})
         `;
 
         await sql`

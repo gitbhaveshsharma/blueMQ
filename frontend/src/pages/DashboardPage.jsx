@@ -2,11 +2,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../services/api';
 import toast from 'react-hot-toast';
 import {
-  Activity,
   CheckCircle,
   XCircle,
-  Clock,
-  AlertTriangle,
   RefreshCw,
 } from 'lucide-react';
 
@@ -58,7 +55,6 @@ export default function DashboardPage() {
 
   const providers = health.providers || {};
   const queues = health.queues || {};
-  const waha = health.waha || {};
 
   return (
     <div className="space-y-6">
@@ -141,30 +137,6 @@ export default function DashboardPage() {
               </div>
             );
           })}
-        </div>
-      </section>
-
-      {/* WAHA status */}
-      <section>
-        <h3 className="mb-3 text-sm font-semibold text-gray-600 uppercase tracking-wider">
-          WhatsApp (WAHA)
-        </h3>
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            {waha.reachable ? (
-              <CheckCircle className="h-5 w-5 text-green-500" />
-            ) : (
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
-            )}
-            <div>
-              <p className="text-sm font-medium text-gray-700">
-                {waha.reachable ? 'Connected' : 'Not reachable'}
-              </p>
-              {waha.error && (
-                <p className="text-xs text-gray-400">{waha.error}</p>
-              )}
-            </div>
-          </div>
         </div>
       </section>
 

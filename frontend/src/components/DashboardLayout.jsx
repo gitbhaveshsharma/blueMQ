@@ -8,10 +8,9 @@ import {
   MessageSquare,
   LogOut,
   Menu,
-  X,
   User,
 } from 'lucide-react';
-import { useState } from 'react';
+import { createElement, useState } from 'react';
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -52,7 +51,7 @@ export default function DashboardLayout() {
         </div>
 
         <nav className="mt-4 flex flex-col gap-1 px-3">
-          {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+          {NAV_ITEMS.map(({ to, label, icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -65,7 +64,7 @@ export default function DashboardLayout() {
                 }`
               }
             >
-              <Icon size={18} />
+              {createElement(icon, { size: 18 })}
               {label}
             </NavLink>
           ))}

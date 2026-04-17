@@ -34,9 +34,6 @@ frontend
 logs
 *.log
 
-# WAHA (separate container)
-waha
-
 # Nginx configs (mounted separately)
 nginx
 

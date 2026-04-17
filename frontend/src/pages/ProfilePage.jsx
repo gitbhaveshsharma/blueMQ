@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react';
+import { createElement, useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import toast from 'react-hot-toast';
 import { Copy, Check, RefreshCw, User, Mail, Hash, Key, Calendar } from 'lucide-react';
 
-function Field({ label, icon: Icon, children }) {
+function Field({ label, icon, children }) {
   return (
     <div className="flex flex-col gap-1.5">
       <p className="flex items-center gap-1.5 text-xs font-medium text-gray-500 uppercase tracking-wider">
-        <Icon size={12} />
+        {createElement(icon, { size: 12 })}
         {label}
       </p>
       <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800">

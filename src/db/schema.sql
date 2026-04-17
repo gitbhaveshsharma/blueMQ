@@ -83,12 +83,9 @@ CREATE INDEX IF NOT EXISTS idx_notification_logs_nid
   ON notification_logs (notification_id);
 
 -- 5. WhatsApp Sessions (one per entity / coaching center)
--- Supports two connection types:
---   - 'waha': Self-hosted WAHA instance with QR code scanning
---   - 'meta': Meta WhatsApp Cloud API with API key authentication
--- Each entity gets its own named WAHA session (e.g. "tutrsy-coach-1") for WAHA connections.
--- Session name is derived from app_id + entity_id via buildSessionName().
--- Multi-session requires WAHA Plus; WAHA Core only supports one session.
+-- Meta Cloud API only.
+-- The existing waha_session column is retained as a generic session identifier
+-- for backward compatibility with previously deployed databases.
 CREATE TABLE IF NOT EXISTS whatsapp_sessions (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_id                   VARCHAR(64)  NOT NULL REFERENCES apps(app_id),
@@ -100,17 +97,44 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
   connected_at             TIMESTAMPTZ,
   disconnected_at          TIMESTAMPTZ,
   created_at               TIMESTAMPTZ  NOT NULL DEFAULT now(),
-  -- Meta WhatsApp Cloud API fields (used when connection_type = 'meta')
-  connection_type          VARCHAR(20)  NOT NULL DEFAULT 'waha',
+  -- Meta WhatsApp Cloud API fields
+  connection_type          VARCHAR(20)  NOT NULL DEFAULT 'meta',
   meta_api_key             TEXT         DEFAULT NULL,
   meta_phone_number_id     VARCHAR(100) DEFAULT NULL,
   meta_business_account_id VARCHAR(100) DEFAULT NULL,
   UNIQUE (app_id, entity_id),
-  CONSTRAINT chk_connection_type CHECK (connection_type IN ('waha', 'meta'))
+  CONSTRAINT chk_connection_type CHECK (connection_type = 'meta')
 );
 
--- Drop the old unique constraint on waha_session if it exists (idempotent)
+ALTER TABLE whatsapp_sessions
+  ADD COLUMN IF NOT EXISTS connection_type VARCHAR(20) NOT NULL DEFAULT 'meta';
+
+ALTER TABLE whatsapp_sessions
+  ADD COLUMN IF NOT EXISTS meta_api_key TEXT DEFAULT NULL;
+
+ALTER TABLE whatsapp_sessions
+  ADD COLUMN IF NOT EXISTS meta_phone_number_id VARCHAR(100) DEFAULT NULL;
+
+ALTER TABLE whatsapp_sessions
+  ADD COLUMN IF NOT EXISTS meta_business_account_id VARCHAR(100) DEFAULT NULL;
+
+-- Drop old constraints if they exist (idempotent)
 ALTER TABLE whatsapp_sessions DROP CONSTRAINT IF EXISTS whatsapp_sessions_waha_session_key;
+ALTER TABLE whatsapp_sessions DROP CONSTRAINT IF EXISTS chk_connection_type;
+
+-- Convert legacy non-meta rows to disconnected meta rows so the new constraint is safe.
+UPDATE whatsapp_sessions
+SET
+  connection_type = 'meta',
+  status = CASE WHEN status = 'active' THEN 'disconnected' ELSE status END,
+  qr_code = NULL
+WHERE connection_type IS DISTINCT FROM 'meta';
+
+ALTER TABLE whatsapp_sessions
+  ALTER COLUMN connection_type SET DEFAULT 'meta';
+
+ALTER TABLE whatsapp_sessions
+  ADD CONSTRAINT chk_connection_type CHECK (connection_type = 'meta');
 
 -- Fast lookup for active sessions during message sending
 CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_lookup

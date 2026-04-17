@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../services/api';
 import toast from 'react-hot-toast';
 import {
@@ -38,7 +38,7 @@ export default function TemplatesPage() {
   const [filterType, setFilterType] = useState('');
   const [filterChannel, setFilterChannel] = useState('');
 
-  async function fetchTemplates() {
+  const fetchTemplates = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.getTemplates({
@@ -51,11 +51,11 @@ export default function TemplatesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [filterType, filterChannel]);
 
   useEffect(() => {
     fetchTemplates();
-  }, [filterType, filterChannel]);
+  }, [fetchTemplates]);
 
   function openCreate() {
     setEditingId(null);
@@ -222,10 +222,10 @@ export default function TemplatesPage() {
                       {tpl.channel}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-700 max-w-[200px] truncate">
+                  <td className="px-4 py-3 text-gray-700 max-w-50 truncate">
                     {tpl.title || '—'}
                   </td>
-                  <td className="px-4 py-3 text-gray-500 max-w-[300px] truncate hidden md:table-cell">
+                  <td className="px-4 py-3 text-gray-500 max-w-75 truncate hidden md:table-cell">
                     {tpl.body}
                   </td>
                   <td className="px-4 py-3">

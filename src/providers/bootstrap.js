@@ -10,12 +10,9 @@
  *   2. Add a factory here
  *   3. Add channel flag in provider-routing config
  *
- * WhatsApp supports two providers:
- *   - WAHA (default): Self-hosted, uses QR code scanning
- *   - Meta: WhatsApp Cloud API, uses API key authentication
+ * WhatsApp is Meta Cloud API only.
  *
- * The getWhatsAppProvider() helper returns the correct provider instance
- * based on the connection_type stored in the database.
+ * The getWhatsAppProvider() helper returns the Meta provider instance.
  */
 
 const { registry } = require("./registry");
@@ -23,12 +20,10 @@ const config = require("../config");
 const { OneSignalProvider } = require("./onesignal.provider");
 const { FirebaseProvider } = require("./firebase.provider");
 const { ResendProvider } = require("./resend.provider");
-const { WahaProvider } = require("./waha.provider");
 const { MetaWhatsAppProvider } = require("./meta-whatsapp.provider");
 const { InAppProvider } = require("./inapp.provider");
 
 // Provider instances (created once at startup)
-let wahaProvider = null;
 let metaWhatsAppProvider = null;
 
 function createProviderFactories() {
@@ -39,7 +34,6 @@ function createProviderFactories() {
     firebase: () => (cache.firebase ||= new FirebaseProvider()),
     resend: () => (cache.resend ||= new ResendProvider()),
     inapp: () => (cache.inapp ||= new InAppProvider()),
-    waha: () => (cache.waha ||= new WahaProvider()),
     meta: () => (cache.meta ||= new MetaWhatsAppProvider()),
   };
 }
@@ -61,11 +55,9 @@ function bootstrapProviders() {
   registerPrimaryChannel("push", primary.push, factories);
   registerPrimaryChannel("email", primary.email, factories);
   registerPrimaryChannel("sms", primary.sms, factories);
+  registerPrimaryChannel("whatsapp", primary.whatsapp, factories);
   registerPrimaryChannel("inapp", primary.inapp, factories);
-
-  wahaProvider = factories.waha();
   metaWhatsAppProvider = factories.meta();
-  registry.register("whatsapp", wahaProvider);
 
   console.log(
     "[providers] Routing config:",
@@ -79,28 +71,17 @@ function bootstrapProviders() {
 }
 
 /**
- * Get the appropriate WhatsApp provider based on connection type.
+ * Get the WhatsApp provider instance.
  *
- * @param {string} connectionType — 'waha' or 'meta'
  * @returns {import('./interface').INotificationProvider} — provider instance
  */
-function getWhatsAppProvider(connectionType) {
-  if (connectionType === "meta") {
-    if (!metaWhatsAppProvider) {
-      throw new Error(
-        "MetaWhatsAppProvider not initialized — call bootstrapProviders() first",
-      );
-    }
-    return metaWhatsAppProvider;
-  }
-
-  // Default to WAHA provider
-  if (!wahaProvider) {
+function getWhatsAppProvider() {
+  if (!metaWhatsAppProvider) {
     throw new Error(
-      "WahaProvider not initialized — call bootstrapProviders() first",
+      "MetaWhatsAppProvider not initialized — call bootstrapProviders() first",
     );
   }
-  return wahaProvider;
+  return metaWhatsAppProvider;
 }
 
 module.exports = { bootstrapProviders, getWhatsAppProvider };

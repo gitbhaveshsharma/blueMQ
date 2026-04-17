@@ -3,7 +3,6 @@
 #
 # This file orchestrates all BlueMQ services:
 # - BlueMQ API (Node.js)
-# - WAHA (WhatsApp HTTP API)
 # - Redis (Queue backend)
 # - Nginx (Reverse proxy with SSL)
 #
@@ -26,15 +25,10 @@ services:
       - REDIS_URL=redis://redis:6379
       - ONESIGNAL_APP_ID=${ONESIGNAL_APP_ID}
       - ONESIGNAL_API_KEY=${ONESIGNAL_API_KEY}
-      - WAHA_BASE_URL=http://waha:3000
-      - WAHA_API_KEY=${WAHA_API_KEY}
-      - WAHA_WEBHOOK_SECRET=${WAHA_WEBHOOK_SECRET}
       - BASE_URL=${BASE_URL}
       - SERVICE_API_KEY_SECRET=${SERVICE_API_KEY_SECRET}
     depends_on:
       redis:
-        condition: service_healthy
-      waha:
         condition: service_healthy
     healthcheck:
       test:
@@ -57,48 +51,18 @@ services:
       - "3001"
 
   # ─────────────────────────────────────────────────────────────
-  # WAHA (WhatsApp HTTP API)
-  # ─────────────────────────────────────────────────────────────
-  waha:
-    image: devlikeapro/waha
-    container_name: bluemq-waha
-    restart: unless-stopped
-    environment:
-      - WHATSAPP_API_KEY=${WAHA_API_KEY}
-      - WHATSAPP_HOOK_URL=${WHATSAPP_HOOK_URL:-${BASE_URL:-http://bluemq:3001}/whatsapp/sessions/webhook?secret=${WAHA_WEBHOOK_SECRET:-dev-webhook-secret}}
-      - WHATSAPP_HOOK_EVENTS=session.status
-      - WHATSAPP_DEFAULT_ENGINE=WEBJS
-      - WAHA_LOG_LEVEL=info
-    volumes:
-      - waha_sessions:/app/.sessions
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'curl -fsS -H "X-Api-Key: $$WHATSAPP_API_KEY" http://localhost:3000/api/server/status >/dev/null || exit 1',
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - bluemq-network
-    # Don't expose directly — only BlueMQ talks to WAHA
-    expose:
-      - "3000"
-
-  # ─────────────────────────────────────────────────────────────
   # Redis (BullMQ Queue Backend)
   # ─────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: bluemq-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy
+      allkeys-lru
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -139,7 +103,8 @@ services:
     volumes:
       - ./nginx/certbot/conf:/etc/letsencrypt
       - ./nginx/certbot/www:/var/www/certbot
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h &
+      wait $${!}; done;'"
     networks:
       - bluemq-network
 
@@ -154,7 +119,5 @@ networks:
 # Volumes
 # ─────────────────────────────────────────────────────────────
 volumes:
-  waha_sessions:
-    driver: local
   redis_data:
     driver: local

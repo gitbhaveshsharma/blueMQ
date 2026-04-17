@@ -24,6 +24,9 @@ function getProviderFlags() {
     sms: {
       onesignal: parseBooleanEnv("PROVIDER_SMS_ONESIGNAL", true),
     },
+    whatsapp: {
+      meta: parseBooleanEnv("PROVIDER_WHATSAPP_META", true),
+    },
   };
 }
 
@@ -50,7 +53,7 @@ function buildProviderRouting() {
       push: resolveChannelProvider("push", flags.push),
       email: resolveChannelProvider("email", flags.email),
       sms: resolveChannelProvider("sms", flags.sms),
-      whatsapp: "waha",
+      whatsapp: resolveChannelProvider("whatsapp", flags.whatsapp),
       inapp: "inapp",
     },
   };
