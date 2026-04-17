@@ -18,25 +18,23 @@ This guide deploys BlueMQ on a DigitalOcean Droplet with a Meta-only WhatsApp se
 - Redis (local or managed)
 - Meta WhatsApp Cloud API credentials per entity
 
-## 1) Base Server Setup
+## 1) Base ServerS
 
-```bash
+````bash
 ssh root@your_droplet_ip
 apt update && apt upgrade -y
-adduser bluemq
+adduser
 usermod -aG sudo bluemq
 rsync --archive --chown=bluemq:bluemq ~/.ssh /home/bluemq
 su - bluemq
-```
 
-Firewall:
 
 ```bash
 sudo ufw allow OpenSSH
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw enable
-```
+````
 
 ## 2) Install Runtime Dependencies
 

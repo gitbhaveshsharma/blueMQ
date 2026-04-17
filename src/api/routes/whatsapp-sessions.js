@@ -1,6 +1,10 @@
 const { Router } = require("express");
 const { getDb } = require("../../db");
 const { getWhatsAppProvider } = require("../../providers/bootstrap");
+const {
+  normalizeEntityId,
+  resolveWhatsAppSession,
+} = require("../../utils/whatsapp-session");
 
 const router = Router();
 
@@ -33,14 +37,27 @@ router.post("/sessions", async (req, res) => {
     const {
       entity_id,
       entity_name,
+      parent_entity_id,
       connection_type,
       meta_api_key,
       meta_phone_number_id,
       meta_business_account_id,
     } = req.body;
 
-    if (!entity_id) {
+    const normalizedEntityId = normalizeEntityId(entity_id);
+    const normalizedParentEntityId = normalizeEntityId(parent_entity_id);
+
+    if (!normalizedEntityId) {
       return res.status(400).json({ error: "Required: entity_id" });
+    }
+
+    if (
+      normalizedParentEntityId &&
+      normalizedParentEntityId === normalizedEntityId
+    ) {
+      return res.status(400).json({
+        error: "parent_entity_id must be different from entity_id",
+      });
     }
 
     if (connection_type && connection_type !== "meta") {
@@ -62,12 +79,13 @@ router.post("/sessions", async (req, res) => {
     }
 
     const sql = getDb();
-    const sessionName = buildSessionName(appId, entity_id);
+    const sessionName = buildSessionName(appId, normalizedEntityId);
 
     await sql`
       INSERT INTO whatsapp_sessions (
         app_id,
         entity_id,
+        parent_entity_id,
         waha_session,
         status,
         qr_code,
@@ -80,7 +98,8 @@ router.post("/sessions", async (req, res) => {
       )
       VALUES (
         ${appId},
-        ${entity_id},
+        ${normalizedEntityId},
+        ${normalizedParentEntityId || null},
         ${sessionName},
         'active',
         NULL,
@@ -92,6 +111,7 @@ router.post("/sessions", async (req, res) => {
         NULL
       )
       ON CONFLICT (app_id, entity_id) DO UPDATE SET
+        parent_entity_id = EXCLUDED.parent_entity_id,
         waha_session = EXCLUDED.waha_session,
         status = 'active',
         qr_code = NULL,
@@ -105,8 +125,11 @@ router.post("/sessions", async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      entity_id,
-      entity_name: entity_name || entity_id,
+      entity_id: normalizedEntityId,
+      resolved_entity_id: normalizedEntityId,
+      parent_entity_id: normalizedParentEntityId || null,
+      is_inherited: false,
+      entity_name: entity_name || normalizedEntityId,
       status: "active",
       connection_type: "meta",
       session_name: sessionName,
@@ -134,6 +157,7 @@ router.get("/sessions", async (req, res) => {
       ? await sql`
           SELECT
             entity_id,
+            parent_entity_id,
             waha_session AS session_name,
             waha_session,
             status,
@@ -153,6 +177,7 @@ router.get("/sessions", async (req, res) => {
       : await sql`
           SELECT
             entity_id,
+            parent_entity_id,
             waha_session AS session_name,
             waha_session,
             status,
@@ -182,39 +207,24 @@ router.get("/sessions", async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // GET /whatsapp/sessions/:entity_id
-// Fetch one Meta WhatsApp session status.
+// Fetch one Meta WhatsApp session status, with optional parent fallback.
 // ─────────────────────────────────────────────────────────────
 router.get("/sessions/:entity_id", async (req, res) => {
   try {
     const appId = req.appId;
     const { entity_id } = req.params;
+    const parentEntityId = normalizeEntityId(req.query.parent_entity_id);
     const sql = getDb();
 
-    const rows = await sql`
-      SELECT
-        entity_id,
-        waha_session AS session_name,
-        waha_session,
-        status,
-        phone_number,
-        connected_at,
-        disconnected_at,
-        created_at,
-        connection_type,
-        meta_api_key,
-        meta_phone_number_id,
-        meta_business_account_id
-      FROM whatsapp_sessions
-      WHERE app_id = ${appId}
-        AND entity_id = ${entity_id}
-      LIMIT 1
-    `;
+    const { session, isInherited } = await resolveWhatsAppSession(sql, {
+      appId,
+      entityId: entity_id,
+      parentEntityId,
+    });
 
-    if (rows.length === 0) {
+    if (!session) {
       return res.json({ success: true, status: "not_configured" });
     }
-
-    const session = rows[0];
 
     if (session.connection_type !== "meta") {
       return res.json({
@@ -226,6 +236,9 @@ router.get("/sessions/:entity_id", async (req, res) => {
     return res.json({
       success: true,
       entity_id: session.entity_id,
+      resolved_entity_id: session.entity_id,
+      is_inherited: isInherited,
+      parent_entity_id: session.parent_entity_id || parentEntityId || null,
       session_name: session.session_name,
       waha_session: session.waha_session,
       status: session.status,
@@ -251,14 +264,14 @@ router.get("/sessions/:entity_id", async (req, res) => {
 router.delete("/sessions/:entity_id", async (req, res) => {
   try {
     const appId = req.appId;
-    const { entity_id } = req.params;
+    const entityId = normalizeEntityId(req.params.entity_id);
     const sql = getDb();
 
     const rows = await sql`
       SELECT entity_id
       FROM whatsapp_sessions
       WHERE app_id = ${appId}
-        AND entity_id = ${entity_id}
+        AND entity_id = ${entityId}
         AND connection_type = 'meta'
       LIMIT 1
     `;
@@ -275,7 +288,7 @@ router.delete("/sessions/:entity_id", async (req, res) => {
         qr_code = NULL,
         meta_api_key = NULL
       WHERE app_id = ${appId}
-        AND entity_id = ${entity_id}
+        AND entity_id = ${entityId}
     `;
 
     return res.json({ success: true });
@@ -287,13 +300,15 @@ router.delete("/sessions/:entity_id", async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // POST /whatsapp/sessions/:entity_id/test-message
-// Send a test WhatsApp message via Meta Cloud API.
+// Send a test WhatsApp message via Meta Cloud API, using parent fallback
+// when the entity itself has no active credentials.
 // ─────────────────────────────────────────────────────────────
 router.post("/sessions/:entity_id/test-message", async (req, res) => {
   try {
     const appId = req.appId;
     const { entity_id } = req.params;
-    const { phone, message } = req.body;
+    const { phone, message, parent_entity_id } = req.body;
+    const parentEntityId = normalizeEntityId(parent_entity_id);
 
     const cleanPhone = normalizePhone(phone);
     if (!cleanPhone || !/^\d{7,15}$/.test(cleanPhone)) {
@@ -305,19 +320,15 @@ router.post("/sessions/:entity_id/test-message", async (req, res) => {
 
     const sql = getDb();
 
-    const rows = await sql`
-      SELECT status, connection_type, meta_api_key, meta_phone_number_id
-      FROM whatsapp_sessions
-      WHERE app_id = ${appId}
-        AND entity_id = ${entity_id}
-      LIMIT 1
-    `;
+    const { session, isInherited } = await resolveWhatsAppSession(sql, {
+      appId,
+      entityId: entity_id,
+      parentEntityId,
+    });
 
-    if (rows.length === 0) {
+    if (!session) {
       return res.status(404).json({ error: "Session not found" });
     }
-
-    const session = rows[0];
 
     if (session.connection_type !== "meta") {
       return res.status(409).json({
@@ -352,6 +363,9 @@ router.post("/sessions/:entity_id/test-message", async (req, res) => {
     return res.json({
       success: true,
       sent_to: cleanPhone,
+      resolved_entity_id: session.entity_id,
+      parent_entity_id: session.parent_entity_id || parentEntityId || null,
+      is_inherited: isInherited,
       provider: "meta-whatsapp",
       message_id: result.providerMessageId,
     });

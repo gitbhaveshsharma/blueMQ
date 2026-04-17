@@ -16,6 +16,7 @@ const { getQueue } = require("./index");
  * @param {object} opts.user            — { email, phone, onesignal_player_id, ... }
  * @param {string} [opts.actionUrl]
  * @param {object} [opts.data]          — arbitrary extra data
+ * @param {string} [opts.parentEntityId]
  * @param {string[]} opts.channels      — ["push","email","whatsapp", ...]
  */
 async function enqueueNotification(opts) {
@@ -30,6 +31,7 @@ async function enqueueNotification(opts) {
     data,
     channels,
     entityId,
+    parentEntityId,
   } = opts;
 
   const jobPayload = {
@@ -44,6 +46,7 @@ async function enqueueNotification(opts) {
     actionUrl,
     data,
     entityId,
+    parentEntityId,
   };
 
   const enqueued = [];

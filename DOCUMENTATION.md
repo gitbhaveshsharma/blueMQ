@@ -79,11 +79,12 @@ Per-channel attempt logs with status and provider message id.
 
 ### whatsapp_sessions
 
-Per-entity Meta WhatsApp configuration.
+Per-entity Meta WhatsApp configuration with optional parent fallback.
 
 Key columns:
 
 - `app_id`, `entity_id`
+- `parent_entity_id` (optional parent entity used when the child has no active credentials)
 - `waha_session` (legacy column retained as generic session identifier)
 - `status` (`active|pending|disconnected`)
 - `connection_type` (enforced to `meta`)
@@ -132,7 +133,7 @@ Headers: x-api-key: <app-api-key>
 
 Important WhatsApp rule:
 
-- if `channels` contains `whatsapp`, `entity_id` is required.
+- if `channels` contains `whatsapp`, provide `entity_id` or `parent_entity_id`.
 
 ## 6.5 Notification Reads
 
@@ -160,6 +161,7 @@ POST /whatsapp/sessions
 Headers: x-api-key: <app-api-key>
 Body: {
   "entity_id": "branch_1",
+  "parent_entity_id": "center_1",
   "entity_name": "Main Branch",
   "connection_type": "meta",
   "meta_api_key": "EA...",
@@ -176,13 +178,19 @@ Headers: x-api-key: <app-api-key>
 ```
 
 `meta_api_key` is masked in responses.
+If a child entity has no active session, pass `?parent_entity_id=...` to resolve the parent fallback.
+Responses include `resolved_entity_id` and `is_inherited` so clients can tell when a parent session is being used.
 
 ### Send test message
 
 ```http
 POST /whatsapp/sessions/:entity_id/test-message
 Headers: x-api-key: <app-api-key>
-Body: { "phone": "919876543210", "message": "Hello" }
+Body: {
+  "phone": "919876543210",
+  "message": "Hello",
+  "parent_entity_id": "center_1"
+}
 ```
 
 ### Disconnect
@@ -203,7 +211,7 @@ Headers: x-api-key: <app-api-key>
 
 ### WhatsApp worker
 
-- resolves active session by `(app_id, entity_id)`
+- resolves active session by `(app_id, entity_id)` and falls back to the parent entity when needed
 - enforces `connection_type = meta`
 - sends via `MetaWhatsAppProvider`
 - logs `meta-whatsapp` as provider

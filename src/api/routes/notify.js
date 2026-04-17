@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require("uuid");
 const { getDb } = require("../../db");
 const { enqueueNotification } = require("../../queues/enqueue");
 const { renderTemplate } = require("../../utils/template");
+const { normalizeEntityId } = require("../../utils/whatsapp-session");
 
 const router = Router();
 
@@ -45,8 +46,11 @@ router.post("/", async (req, res) => {
       action_url,
       data,
       entity_id,
+      parent_entity_id,
     } = req.body;
     const appId = req.appId;
+    const resolvedEntityId = normalizeEntityId(entity_id);
+    const resolvedParentEntityId = normalizeEntityId(parent_entity_id);
 
     // ─── 1. Validate ───
     if (
@@ -68,16 +72,22 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // If whatsapp requested but entity_id missing — warn and drop whatsapp
+    // If whatsapp requested but neither child nor parent entity is provided,
+    // warn and drop WhatsApp from the delivery set.
     let effectiveChannels = [...channels];
-    if (channels.includes("whatsapp") && !entity_id) {
+    if (
+      channels.includes("whatsapp") &&
+      !resolvedEntityId &&
+      !resolvedParentEntityId
+    ) {
       console.warn(
-        `[notify] ⚠ WhatsApp requested but entity_id missing — skipping whatsapp for user ${user_id}`,
+        `[notify] ⚠ WhatsApp requested but entity_id/parent_entity_id missing — skipping whatsapp for user ${user_id}`,
       );
       effectiveChannels = effectiveChannels.filter((c) => c !== "whatsapp");
       if (effectiveChannels.length === 0) {
         return res.status(400).json({
-          error: "entity_id is required when the only channel is whatsapp",
+          error:
+            "entity_id or parent_entity_id is required when the only channel is whatsapp",
         });
       }
     }
@@ -150,7 +160,8 @@ router.post("/", async (req, res) => {
       actionUrl: action_url,
       data,
       channels: resolvedChannels,
-      entityId: entity_id,
+      entityId: resolvedEntityId,
+      parentEntityId: resolvedParentEntityId,
     });
 
     // ─── 5. Return immediately ───

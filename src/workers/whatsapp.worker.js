@@ -3,13 +3,15 @@ const { getRedisConnection } = require("../queues/connection");
 const { getWhatsAppProvider } = require("../providers/bootstrap");
 const { getDb } = require("../db");
 const config = require("../config");
+const { resolveWhatsAppSession } = require("../utils/whatsapp-session");
 
 /**
  * WhatsApp worker — custom logic on top of the base pattern.
  *
  * Before calling the provider, we look up the active WhatsApp session
- * for the (appId + entityId) pair.  If no active session exists the job is
- * logged as failed and **not** retried (missing session is not transient).
+ * for the (appId + entityId) pair and fall back one level to the parent
+ * entity when needed. If no active session exists the job is logged as
+ * failed and **not** retried (missing session is not transient).
  */
 function createWhatsAppWorker() {
   const channel = "whatsapp";
@@ -24,6 +26,7 @@ function createWhatsAppWorker() {
         notificationId,
         appId,
         entityId,
+        parentEntityId,
         title,
         body,
         ctaText,
@@ -40,19 +43,18 @@ function createWhatsAppWorker() {
       );
 
       // ─── 1. Lookup active WhatsApp session for this entity ───
-      const [session] = await sql`
-        SELECT connection_type, meta_api_key, meta_phone_number_id
-        FROM whatsapp_sessions
-        WHERE app_id    = ${appId}
-          AND entity_id = ${entityId || ""}
-          AND status    = 'active'
-        LIMIT 1
-      `;
+      const { session, isInherited, resolvedEntityId } = await resolveWhatsAppSession(sql, {
+        appId,
+        entityId,
+        parentEntityId,
+      });
 
       if (!session) {
         const reason = entityId
-          ? `No active WhatsApp session for entity "${entityId}"`
-          : "No entity_id provided — cannot resolve WhatsApp session";
+          ? `No active WhatsApp session for entity "${entityId}"${parentEntityId ? ` or parent "${parentEntityId}"` : ""}`
+          : parentEntityId
+            ? `No active WhatsApp session for parent entity "${parentEntityId}"`
+            : "No entity_id provided — cannot resolve WhatsApp session";
 
         console.warn(`[whatsapp] ⚠ ${notificationId}: ${reason}`);
 
@@ -96,6 +98,26 @@ function createWhatsAppWorker() {
         return;
       }
 
+      if (session.status !== "active") {
+        const reason = `WhatsApp session for entity "${entityId || resolvedEntityId}" is not active`;
+
+        await sql`
+          INSERT INTO notification_logs
+            (notification_id, channel, status, provider, error, attempt_number)
+          VALUES
+            (${notificationId}, ${channel}, 'failed', 'meta-whatsapp', ${reason}, ${attemptNumber})
+        `;
+
+        await sql`
+          UPDATE notifications
+          SET status = 'failed'
+          WHERE id = ${notificationId}
+            AND status != 'delivered'
+        `;
+
+        return;
+      }
+
       const metaProvider = getWhatsAppProvider();
 
       const metaPayload = {
@@ -110,8 +132,15 @@ function createWhatsAppWorker() {
         metaPhoneNumberId: session.meta_phone_number_id,
       };
 
+      const requestLabel = entityId || parentEntityId || resolvedEntityId || "unknown entity";
+      const inheritanceLabel = isInherited
+        ? entityId
+          ? `, inherited from ${resolvedEntityId}`
+          : `, fallback parent ${resolvedEntityId}`
+        : "";
+
       console.log(
-        `[whatsapp] Using Meta provider for ${notificationId} (entity: ${entityId})`,
+        `[whatsapp] Using Meta provider for ${notificationId} (entity: ${requestLabel}${inheritanceLabel})`,
       );
 
       const result = await metaProvider.sendWhatsApp(metaPayload);

@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_id                   VARCHAR(64)  NOT NULL REFERENCES apps(app_id),
   entity_id                VARCHAR(255) NOT NULL,
+  parent_entity_id         VARCHAR(255) DEFAULT NULL, -- optional parent entity for fallback
   waha_session             VARCHAR(255) NOT NULL,
   phone_number             VARCHAR(20),
   status                   VARCHAR(32)  NOT NULL DEFAULT 'pending',
@@ -108,6 +109,9 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
 
 ALTER TABLE whatsapp_sessions
   ADD COLUMN IF NOT EXISTS connection_type VARCHAR(20) NOT NULL DEFAULT 'meta';
+
+ALTER TABLE whatsapp_sessions
+  ADD COLUMN IF NOT EXISTS parent_entity_id VARCHAR(255) DEFAULT NULL;
 
 ALTER TABLE whatsapp_sessions
   ADD COLUMN IF NOT EXISTS meta_api_key TEXT DEFAULT NULL;
@@ -136,9 +140,16 @@ ALTER TABLE whatsapp_sessions
 ALTER TABLE whatsapp_sessions
   ADD CONSTRAINT chk_connection_type CHECK (connection_type = 'meta');
 
+COMMENT ON COLUMN whatsapp_sessions.parent_entity_id IS
+  'Optional parent entity used when the child inherits WhatsApp credentials';
+
 -- Fast lookup for active sessions during message sending
 CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_lookup
   ON whatsapp_sessions (app_id, entity_id)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_parent_lookup
+  ON whatsapp_sessions (app_id, parent_entity_id)
   WHERE status = 'active';
 
 -- Fast lookup for webhook → DB row mapping
