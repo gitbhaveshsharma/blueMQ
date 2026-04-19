@@ -1,31 +1,24 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api } from '../services/api';
-import toast from 'react-hot-toast';
-import {
-  Plus,
-  Pencil,
-  Trash2,
-  X,
-  RefreshCw,
-  FileText,
-} from 'lucide-react';
+import { useCallback, useEffect, useState } from "react";
+import { api } from "../services/api";
+import toast from "react-hot-toast";
+import { Plus, Pencil, Trash2, X, RefreshCw, FileText } from "lucide-react";
 
-const CHANNELS = ['push', 'email', 'sms', 'whatsapp', 'in_app'];
+const CHANNELS = ["push", "email", "sms", "whatsapp", "in_app"];
 
 const CHANNEL_COLORS = {
-  push: 'bg-blue-50 text-blue-700',
-  email: 'bg-violet-50 text-violet-700',
-  sms: 'bg-amber-50 text-amber-700',
-  whatsapp: 'bg-green-50 text-green-700',
-  in_app: 'bg-rose-50 text-rose-700',
+  push: "bg-blue-50 text-blue-700",
+  email: "bg-violet-50 text-violet-700",
+  sms: "bg-amber-50 text-amber-700",
+  whatsapp: "bg-green-50 text-green-700",
+  in_app: "bg-rose-50 text-rose-700",
 };
 
 const EMPTY_FORM = {
-  type: '',
-  channel: 'push',
-  title: '',
-  body: '',
-  cta_text: '',
+  type: "",
+  channel: "push",
+  title: "",
+  body: "",
+  cta_text: "",
 };
 
 export default function TemplatesPage() {
@@ -35,8 +28,8 @@ export default function TemplatesPage() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [saving, setSaving] = useState(false);
-  const [filterType, setFilterType] = useState('');
-  const [filterChannel, setFilterChannel] = useState('');
+  const [filterType, setFilterType] = useState("");
+  const [filterChannel, setFilterChannel] = useState("");
 
   const fetchTemplates = useCallback(async () => {
     setLoading(true);
@@ -47,14 +40,17 @@ export default function TemplatesPage() {
       });
       setTemplates(data.data || []);
     } catch (err) {
-      toast.error('Failed to load templates: ' + err.message);
+      toast.error("Failed to load templates: " + err.message);
     } finally {
       setLoading(false);
     }
   }, [filterType, filterChannel]);
 
   useEffect(() => {
-    fetchTemplates();
+    const timer = setTimeout(() => {
+      fetchTemplates();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [fetchTemplates]);
 
   function openCreate() {
@@ -68,9 +64,9 @@ export default function TemplatesPage() {
     setForm({
       type: tpl.type,
       channel: tpl.channel,
-      title: tpl.title || '',
-      body: tpl.body || '',
-      cta_text: tpl.cta_text || '',
+      title: tpl.title || "",
+      body: tpl.body || "",
+      cta_text: tpl.cta_text || "",
     });
     setShowModal(true);
   }
@@ -78,7 +74,7 @@ export default function TemplatesPage() {
   async function handleSave(e) {
     e.preventDefault();
     if (!form.type.trim() || !form.body.trim()) {
-      toast.error('Type and Body are required');
+      toast.error("Type and Body are required");
       return;
     }
 
@@ -90,10 +86,10 @@ export default function TemplatesPage() {
           body: form.body,
           cta_text: form.cta_text || null,
         });
-        toast.success('Template updated');
+        toast.success("Template updated");
       } else {
         await api.createTemplate(form);
-        toast.success('Template created');
+        toast.success("Template created");
       }
       setShowModal(false);
       fetchTemplates();
@@ -105,10 +101,10 @@ export default function TemplatesPage() {
   }
 
   async function handleDelete(id) {
-    if (!confirm('Delete this template permanently?')) return;
+    if (!confirm("Delete this template permanently?")) return;
     try {
       await api.deleteTemplate(id);
-      toast.success('Template deleted');
+      toast.success("Template deleted");
       fetchTemplates();
     } catch (err) {
       toast.error(err.message);
@@ -216,14 +212,15 @@ export default function TemplatesPage() {
                   <td className="px-4 py-3">
                     <span
                       className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                        CHANNEL_COLORS[tpl.channel] || 'bg-gray-50 text-gray-700'
+                        CHANNEL_COLORS[tpl.channel] ||
+                        "bg-gray-50 text-gray-700"
                       }`}
                     >
                       {tpl.channel}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-700 max-w-50 truncate">
-                    {tpl.title || '—'}
+                    {tpl.title || "—"}
                   </td>
                   <td className="px-4 py-3 text-gray-500 max-w-75 truncate hidden md:table-cell">
                     {tpl.body}
@@ -232,11 +229,11 @@ export default function TemplatesPage() {
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                         tpl.is_active !== false
-                          ? 'bg-green-50 text-green-700'
-                          : 'bg-gray-100 text-gray-500'
+                          ? "bg-green-50 text-green-700"
+                          : "bg-gray-100 text-gray-500"
                       }`}
                     >
-                      {tpl.is_active !== false ? 'Active' : 'Inactive'}
+                      {tpl.is_active !== false ? "Active" : "Inactive"}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -270,7 +267,7 @@ export default function TemplatesPage() {
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
             <div className="mb-5 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900">
-                {editingId ? 'Edit Template' : 'Create Template'}
+                {editingId ? "Edit Template" : "Create Template"}
               </h3>
               <button
                 onClick={() => setShowModal(false)}
@@ -341,7 +338,7 @@ export default function TemplatesPage() {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 />
                 <p className="mt-1 text-xs text-gray-400">
-                  Use {'{{variable}}'} placeholders for dynamic content
+                  Use {"{{variable}}"} placeholders for dynamic content
                 </p>
               </div>
 
@@ -373,7 +370,7 @@ export default function TemplatesPage() {
                   disabled={saving}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : editingId ? 'Update' : 'Create'}
+                  {saving ? "Saving..." : editingId ? "Update" : "Create"}
                 </button>
               </div>
             </form>

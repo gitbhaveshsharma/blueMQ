@@ -1,9 +1,13 @@
 const { Router } = require("express");
 const { getDb } = require("../../db");
+const {
+  normalizePublicChannel,
+  isValidPublicChannel,
+  getTemplateChannelCandidates,
+  getAllowedPublicChannels,
+} = require("../../utils/channel");
 
 const router = Router();
-
-const VALID_CHANNELS = ["push", "email", "sms", "whatsapp", "in_app"];
 
 /**
  * GET /templates
@@ -15,19 +19,42 @@ router.get("/", async (req, res) => {
   try {
     const appId = req.appId;
     const { type, channel } = req.query;
+    const normalizedChannel = channel ? normalizePublicChannel(channel) : null;
+
+    if (channel && !isValidPublicChannel(channel)) {
+      return res.status(400).json({
+        error: `Invalid channel. Allowed: ${getAllowedPublicChannels().join(", ")}`,
+      });
+    }
+
     const sql = getDb();
 
     let rows;
-    if (type && channel) {
+    if (type && normalizedChannel) {
+      const templateChannelCandidates =
+        getTemplateChannelCandidates(normalizedChannel);
+
       rows = await sql`
         SELECT * FROM templates
-        WHERE app_id = ${appId} AND type = ${type} AND channel = ${channel}
+        WHERE app_id = ${appId}
+          AND type = ${type}
+          AND channel = ANY(${templateChannelCandidates})
         ORDER BY updated_at DESC
       `;
     } else if (type) {
       rows = await sql`
         SELECT * FROM templates
         WHERE app_id = ${appId} AND type = ${type}
+        ORDER BY updated_at DESC
+      `;
+    } else if (normalizedChannel) {
+      const templateChannelCandidates =
+        getTemplateChannelCandidates(normalizedChannel);
+
+      rows = await sql`
+        SELECT * FROM templates
+        WHERE app_id = ${appId}
+          AND channel = ANY(${templateChannelCandidates})
         ORDER BY updated_at DESC
       `;
     } else {
@@ -38,7 +65,12 @@ router.get("/", async (req, res) => {
       `;
     }
 
-    return res.json({ success: true, data: rows });
+    const normalizedRows = rows.map((row) => ({
+      ...row,
+      channel: normalizePublicChannel(row.channel) || row.channel,
+    }));
+
+    return res.json({ success: true, data: normalizedRows });
   } catch (err) {
     console.error("[templates] GET error:", err);
     return res.status(500).json({ error: "Internal server error" });
@@ -61,22 +93,63 @@ router.post("/", async (req, res) => {
   try {
     const appId = req.appId;
     const { type, channel, title, body, cta_text } = req.body;
+    const normalizedChannel = normalizePublicChannel(channel);
 
-    if (!type || !channel || !body) {
+    if (!type || !normalizedChannel || !body) {
       return res.status(400).json({ error: "Required: type, channel, body" });
     }
 
-    if (!VALID_CHANNELS.includes(channel)) {
+    if (!isValidPublicChannel(channel)) {
       return res.status(400).json({
-        error: `Invalid channel. Allowed: ${VALID_CHANNELS.join(", ")}`,
+        error: `Invalid channel. Allowed: ${getAllowedPublicChannels().join(", ")}`,
       });
     }
 
     const sql = getDb();
 
+    if (normalizedChannel === "in_app") {
+      // Merge any legacy inapp row into canonical in_app for this app/type before upsert.
+      await sql`
+        UPDATE templates AS canonical
+        SET
+          title = legacy.title,
+          body = legacy.body,
+          cta_text = legacy.cta_text,
+          is_active = legacy.is_active,
+          updated_at = legacy.updated_at
+        FROM templates AS legacy
+        WHERE canonical.app_id = ${appId}
+          AND canonical.type = ${type}
+          AND canonical.channel = 'in_app'
+          AND legacy.app_id = ${appId}
+          AND legacy.type = ${type}
+          AND legacy.channel = 'inapp'
+          AND legacy.updated_at > canonical.updated_at
+      `;
+
+      await sql`
+        DELETE FROM templates AS legacy
+        USING templates AS canonical
+        WHERE legacy.app_id = ${appId}
+          AND legacy.type = ${type}
+          AND legacy.channel = 'inapp'
+          AND canonical.app_id = ${appId}
+          AND canonical.type = ${type}
+          AND canonical.channel = 'in_app'
+      `;
+
+      await sql`
+        UPDATE templates
+        SET channel = 'in_app', updated_at = now()
+        WHERE app_id = ${appId}
+          AND type = ${type}
+          AND channel = 'inapp'
+      `;
+    }
+
     const result = await sql`
       INSERT INTO templates (app_id, type, channel, title, body, cta_text)
-      VALUES (${appId}, ${type}, ${channel}, ${title || null}, ${body}, ${cta_text || null})
+      VALUES (${appId}, ${type}, ${normalizedChannel}, ${title || null}, ${body}, ${cta_text || null})
       ON CONFLICT (app_id, type, channel) DO UPDATE SET
         title = EXCLUDED.title,
         body = EXCLUDED.body,
@@ -85,7 +158,12 @@ router.post("/", async (req, res) => {
       RETURNING *
     `;
 
-    return res.status(201).json({ success: true, data: result[0] });
+    const normalizedRow = {
+      ...result[0],
+      channel: normalizePublicChannel(result[0].channel) || result[0].channel,
+    };
+
+    return res.status(201).json({ success: true, data: normalizedRow });
   } catch (err) {
     console.error("[templates] POST error:", err);
     return res.status(500).json({ error: "Internal server error" });
@@ -121,7 +199,12 @@ router.put("/:id", async (req, res) => {
       return res.status(404).json({ error: "Template not found" });
     }
 
-    return res.json({ success: true, data: result[0] });
+    const normalizedRow = {
+      ...result[0],
+      channel: normalizePublicChannel(result[0].channel) || result[0].channel,
+    };
+
+    return res.json({ success: true, data: normalizedRow });
   } catch (err) {
     console.error("[templates] PUT error:", err);
     return res.status(500).json({ error: "Internal server error" });

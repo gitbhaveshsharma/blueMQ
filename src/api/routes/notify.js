@@ -4,10 +4,18 @@ const { getDb } = require("../../db");
 const { enqueueNotification } = require("../../queues/enqueue");
 const { renderTemplate } = require("../../utils/template");
 const { normalizeEntityId } = require("../../utils/whatsapp-session");
+const {
+  normalizePublicChannel,
+  isValidPublicChannel,
+  normalizePublicChannels,
+  getTemplateChannelCandidates,
+  getAllowedPublicChannels,
+  toInternalChannels,
+  toPublicChannel,
+} = require("../../utils/channel");
+const config = require("../../config");
 
 const router = Router();
-
-const VALID_CHANNELS = ["push", "email", "sms", "whatsapp", "inapp"];
 
 /**
  * POST /notify
@@ -65,18 +73,27 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const invalidChannels = channels.filter((c) => !VALID_CHANNELS.includes(c));
+    const invalidChannels = channels.filter(
+      (channel) => !isValidPublicChannel(channel),
+    );
     if (invalidChannels.length > 0) {
       return res.status(400).json({
-        error: `Invalid channels: ${invalidChannels.join(", ")}. Allowed: ${VALID_CHANNELS.join(", ")}`,
+        error: `Invalid channels: ${invalidChannels.join(", ")}. Allowed: ${getAllowedPublicChannels().join(", ")}`,
+      });
+    }
+
+    const normalizedChannels = normalizePublicChannels(channels);
+    if (normalizedChannels.length === 0) {
+      return res.status(400).json({
+        error: "Required fields: user_id, type, channels (non-empty array)",
       });
     }
 
     // If whatsapp requested but neither child nor parent entity is provided,
     // warn and drop WhatsApp from the delivery set.
-    let effectiveChannels = [...channels];
+    let effectiveChannels = [...normalizedChannels];
     if (
-      channels.includes("whatsapp") &&
+      normalizedChannels.includes("whatsapp") &&
       !resolvedEntityId &&
       !resolvedParentEntityId
     ) {
@@ -98,22 +115,53 @@ router.post("/", async (req, res) => {
         .json({ error: "user object is required with delivery addresses" });
     }
 
+    if (effectiveChannels.includes("push")) {
+      const pushProvider = config.providers.primary.push;
+      const hasFirebaseToken = Boolean(
+        user.fcm_token || user.firebase_token || user.push_token,
+      );
+
+      if (pushProvider === "firebase" && !hasFirebaseToken) {
+        return res.status(400).json({
+          error:
+            "Push channel requires user.fcm_token (or user.firebase_token/user.push_token) when Firebase is the active push provider",
+        });
+      }
+    }
+
     const sql = getDb();
 
     // ─── 2. Fetch templates for each channel ───
+    const templateCandidates = [
+      ...new Set(
+        effectiveChannels.flatMap((channel) =>
+          getTemplateChannelCandidates(channel),
+        ),
+      ),
+    ];
+
     const templates = await sql`
       SELECT channel, title, body, cta_text
       FROM templates
       WHERE app_id = ${appId}
         AND type = ${type}
-        AND channel = ANY(${effectiveChannels})
+        AND channel = ANY(${templateCandidates})
         AND is_active = true
+      ORDER BY updated_at DESC
     `;
 
     // Build a map: channel → rendered template
     const templateMap = {};
     for (const tpl of templates) {
-      templateMap[tpl.channel] = {
+      const normalizedTemplateChannel = normalizePublicChannel(tpl.channel);
+      if (
+        !normalizedTemplateChannel ||
+        templateMap[normalizedTemplateChannel]
+      ) {
+        continue;
+      }
+
+      templateMap[normalizedTemplateChannel] = {
         title: renderTemplate(tpl.title, variables),
         body: renderTemplate(tpl.body, variables),
         ctaText: renderTemplate(tpl.cta_text, variables),
@@ -150,6 +198,8 @@ router.post("/", async (req, res) => {
     `;
 
     // ─── 4. Enqueue jobs per channel ───
+    const internalChannels = toInternalChannels(resolvedChannels);
+
     const enqueued = await enqueueNotification({
       notificationId,
       appId,
@@ -159,16 +209,22 @@ router.post("/", async (req, res) => {
       user: { ...user, external_user_id: user_id },
       actionUrl: action_url,
       data,
-      channels: resolvedChannels,
+      channels: internalChannels,
       entityId: resolvedEntityId,
       parentEntityId: resolvedParentEntityId,
     });
+
+    const publicEnqueuedChannels = [
+      ...new Set(
+        (enqueued || []).map((channel) => toPublicChannel(channel) || channel),
+      ),
+    ];
 
     // ─── 5. Return immediately ───
     return res.status(202).json({
       success: true,
       notification_id: notificationId,
-      channels_enqueued: enqueued,
+      channels_enqueued: publicEnqueuedChannels,
     });
   } catch (err) {
     console.error("[notify] Error:", err);

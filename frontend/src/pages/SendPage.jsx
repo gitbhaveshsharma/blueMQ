@@ -1,22 +1,26 @@
-import { useState } from 'react';
-import { api } from '../services/api';
-import toast from 'react-hot-toast';
-import { Send, Plus, Minus } from 'lucide-react';
+import { useState } from "react";
+import { api } from "../services/api";
+import toast from "react-hot-toast";
+import { Send, Plus, Minus } from "lucide-react";
 
-const CHANNELS = ['push', 'email', 'sms', 'whatsapp', 'inapp'];
+const CHANNELS = ["push", "email", "sms", "whatsapp", "in_app"];
 
 export default function SendPage() {
   const [form, setForm] = useState({
-    user_id: '',
-    type: '',
-    channels: ['push'],
-    entity_id: '',
-    action_url: '',
-    email: '',
-    phone: '',
-    onesignal_player_id: '',
+    user_id: "",
+    type: "",
+    channels: ["push"],
+    entity_id: "",
+    parent_entity_id: "",
+    action_url: "",
+    email: "",
+    phone: "",
+    onesignal_player_id: "",
+    fcm_token: "",
+    firebase_token: "",
+    push_token: "",
   });
-  const [variables, setVariables] = useState([{ key: '', value: '' }]);
+  const [variables, setVariables] = useState([{ key: "", value: "" }]);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
 
@@ -31,12 +35,12 @@ export default function SendPage() {
 
   function updateVariable(index, field, value) {
     setVariables((prev) =>
-      prev.map((v, i) => (i === index ? { ...v, [field]: value } : v))
+      prev.map((v, i) => (i === index ? { ...v, [field]: value } : v)),
     );
   }
 
   function addVariable() {
-    setVariables((prev) => [...prev, { key: '', value: '' }]);
+    setVariables((prev) => [...prev, { key: "", value: "" }]);
   }
 
   function removeVariable(index) {
@@ -46,8 +50,12 @@ export default function SendPage() {
   async function handleSend(e) {
     e.preventDefault();
 
-    if (!form.user_id.trim() || !form.type.trim() || form.channels.length === 0) {
-      toast.error('User ID, Type, and at least one channel are required');
+    if (
+      !form.user_id.trim() ||
+      !form.type.trim() ||
+      form.channels.length === 0
+    ) {
+      toast.error("User ID, Type, and at least one channel are required");
       return;
     }
 
@@ -63,6 +71,10 @@ export default function SendPage() {
     if (form.phone.trim()) user.phone = form.phone.trim();
     if (form.onesignal_player_id.trim())
       user.onesignal_player_id = form.onesignal_player_id.trim();
+    if (form.fcm_token.trim()) user.fcm_token = form.fcm_token.trim();
+    if (form.firebase_token.trim())
+      user.firebase_token = form.firebase_token.trim();
+    if (form.push_token.trim()) user.push_token = form.push_token.trim();
 
     const payload = {
       user_id: form.user_id.trim(),
@@ -72,6 +84,7 @@ export default function SendPage() {
       user,
       action_url: form.action_url.trim() || undefined,
       entity_id: form.entity_id.trim() || undefined,
+      parent_entity_id: form.parent_entity_id.trim() || undefined,
     };
 
     setSending(true);
@@ -79,7 +92,7 @@ export default function SendPage() {
     try {
       const data = await api.sendNotification(payload);
       setResult(data);
-      toast.success('Notification enqueued!');
+      toast.success("Notification enqueued!");
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -141,14 +154,24 @@ export default function SendPage() {
                 onClick={() => toggleChannel(ch)}
                 className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
                   form.channels.includes(ch)
-                    ? 'bg-indigo-600 text-white'
-                    : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                    ? "bg-indigo-600 text-white"
+                    : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
                 }`}
               >
                 {ch}
               </button>
             ))}
           </div>
+          {form.channels.includes("push") &&
+            !form.onesignal_player_id.trim() &&
+            !form.fcm_token.trim() &&
+            !form.firebase_token.trim() &&
+            !form.push_token.trim() && (
+              <p className="mt-2 text-xs text-amber-600">
+                Push selected: provide OneSignal Player ID or Firebase token
+                fields based on your configured push provider.
+              </p>
+            )}
         </div>
 
         {/* User fields */}
@@ -197,6 +220,48 @@ export default function SendPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-500">
+                FCM Token
+              </label>
+              <input
+                type="text"
+                value={form.fcm_token}
+                onChange={(e) =>
+                  setForm({ ...form, fcm_token: e.target.value })
+                }
+                placeholder="fcm-device-token"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-500">
+                Firebase Token Alias
+              </label>
+              <input
+                type="text"
+                value={form.firebase_token}
+                onChange={(e) =>
+                  setForm({ ...form, firebase_token: e.target.value })
+                }
+                placeholder="firebase-token"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-500">
+                Generic Push Token Alias
+              </label>
+              <input
+                type="text"
+                value={form.push_token}
+                onChange={(e) =>
+                  setForm({ ...form, push_token: e.target.value })
+                }
+                placeholder="push-token"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-500">
                 Entity ID (WhatsApp)
               </label>
               <input
@@ -206,6 +271,20 @@ export default function SendPage() {
                   setForm({ ...form, entity_id: e.target.value })
                 }
                 placeholder="coaching_center_1"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-500">
+                Parent Entity ID (WhatsApp fallback)
+              </label>
+              <input
+                type="text"
+                value={form.parent_entity_id}
+                onChange={(e) =>
+                  setForm({ ...form, parent_entity_id: e.target.value })
+                }
+                placeholder="coaching_center_parent"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               />
             </div>
@@ -247,14 +326,14 @@ export default function SendPage() {
                 <input
                   type="text"
                   value={v.key}
-                  onChange={(e) => updateVariable(i, 'key', e.target.value)}
+                  onChange={(e) => updateVariable(i, "key", e.target.value)}
                   placeholder="key"
                   className="w-1/3 rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 />
                 <input
                   type="text"
                   value={v.value}
-                  onChange={(e) => updateVariable(i, 'value', e.target.value)}
+                  onChange={(e) => updateVariable(i, "value", e.target.value)}
                   placeholder="value"
                   className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 />
@@ -279,7 +358,7 @@ export default function SendPage() {
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Send size={16} />
-          {sending ? 'Sending...' : 'Send Notification'}
+          {sending ? "Sending..." : "Send Notification"}
         </button>
       </form>
 
@@ -299,7 +378,7 @@ export default function SendPage() {
             <div className="flex gap-2">
               <dt className="font-medium text-green-700">Channels:</dt>
               <dd className="text-green-600">
-                {(result.channels_enqueued || []).join(', ')}
+                {(result.channels_enqueued || []).join(", ")}
               </dd>
             </div>
           </dl>

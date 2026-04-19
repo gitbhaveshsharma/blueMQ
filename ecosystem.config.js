@@ -1,8 +1,27 @@
 const DEFAULT_CHANNELS = ["push", "email", "sms", "whatsapp", "inapp"];
+const { normalizeWorkerChannel } = require("./src/utils/channel");
 
 function parseWorkerChannels(raw) {
   if (!raw) return [...DEFAULT_CHANNELS];
-  return [...new Set(raw.split(",").map((ch) => ch.trim()))].filter(Boolean);
+
+  const channels = [];
+  const seen = new Set();
+
+  for (const channel of raw
+    .split(",")
+    .map((ch) => ch.trim())
+    .filter(Boolean)) {
+    const normalizedChannel = normalizeWorkerChannel(channel) || channel;
+
+    if (seen.has(normalizedChannel)) {
+      continue;
+    }
+
+    seen.add(normalizedChannel);
+    channels.push(normalizedChannel);
+  }
+
+  return channels;
 }
 
 function buildBaseConfig(name) {

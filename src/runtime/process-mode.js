@@ -1,4 +1,5 @@
 const { WORKER_CHANNELS } = require("../workers/channels");
+const { normalizeWorkerChannel } = require("../utils/channel");
 
 const VALID_MODES = new Set(["all", "api", "worker"]);
 
@@ -23,14 +24,33 @@ function normalizeMode(raw) {
 function parseChannels(raw) {
   if (!raw) return [...WORKER_CHANNELS];
 
-  const channels = [...new Set(raw.split(",").map((ch) => ch.trim()))].filter(
+  const requested = [...new Set(raw.split(",").map((ch) => ch.trim()))].filter(
     Boolean,
   );
 
-  const invalid = channels.filter((ch) => !WORKER_CHANNELS.includes(ch));
+  const channels = [];
+  const invalid = [];
+  const seen = new Set();
+
+  for (const channel of requested) {
+    const normalizedChannel = normalizeWorkerChannel(channel);
+
+    if (!normalizedChannel || !WORKER_CHANNELS.includes(normalizedChannel)) {
+      invalid.push(channel);
+      continue;
+    }
+
+    if (seen.has(normalizedChannel)) {
+      continue;
+    }
+
+    seen.add(normalizedChannel);
+    channels.push(normalizedChannel);
+  }
+
   if (invalid.length > 0) {
     throw new Error(
-      `[runtime] Invalid WORKER_CHANNELS: ${invalid.join(", ")}. Allowed: ${WORKER_CHANNELS.join(", ")}`,
+      `[runtime] Invalid WORKER_CHANNELS: ${invalid.join(", ")}. Allowed: ${WORKER_CHANNELS.join(", ")} (in_app alias is accepted for inapp)`,
     );
   }
 

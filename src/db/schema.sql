@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS templates (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   app_id      VARCHAR(64) NOT NULL REFERENCES apps(app_id),
   type        VARCHAR(128) NOT NULL,          -- e.g. "fee_due", "class_reminder"
-  channel     VARCHAR(32)  NOT NULL,          -- push / email / sms / whatsapp / in_app
+  channel     VARCHAR(32)  NOT NULL,          -- push / email / sms / whatsapp / in_app (canonical)
   title       VARCHAR(512),
   body        TEXT NOT NULL,
   cta_text    VARCHAR(255),
@@ -43,6 +43,32 @@ CREATE TABLE IF NOT EXISTS templates (
 
   UNIQUE (app_id, type, channel)
 );
+
+-- Normalize legacy inapp alias to canonical in_app, preserving the latest row.
+UPDATE templates AS canonical
+SET
+  title = legacy.title,
+  body = legacy.body,
+  cta_text = legacy.cta_text,
+  is_active = legacy.is_active,
+  updated_at = legacy.updated_at
+FROM templates AS legacy
+WHERE canonical.app_id = legacy.app_id
+  AND canonical.type = legacy.type
+  AND canonical.channel = 'in_app'
+  AND legacy.channel = 'inapp'
+  AND legacy.updated_at > canonical.updated_at;
+
+DELETE FROM templates AS legacy
+USING templates AS canonical
+WHERE legacy.app_id = canonical.app_id
+  AND legacy.type = canonical.type
+  AND legacy.channel = 'inapp'
+  AND canonical.channel = 'in_app';
+
+UPDATE templates
+SET channel = 'in_app', updated_at = now()
+WHERE channel = 'inapp';
 
 -- 3. Notifications (the master record per user×event)
 CREATE TABLE IF NOT EXISTS notifications (

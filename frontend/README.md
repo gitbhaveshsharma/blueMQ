@@ -1,16 +1,34 @@
-# React + Vite
+# BlueMQ Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Admin/testing UI for BlueMQ.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+The app talks to backend routes through `/api`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Key Screens
 
-## Expanding the ESLint configuration
+- Register App: OTP-based app registration
+- Login: OTP login for existing app
+- Templates: create and manage channel templates
+- Send Notification: enqueue test notifications by channel
+- WhatsApp: manage Meta sessions
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Push Testing
+
+In Send Notification, for push channel you can provide either:
+
+- OneSignal Player ID (`onesignal_player_id`)
+- Firebase token fields (`fcm_token`, `firebase_token`, or `push_token`)
+
+This keeps testing provider-agnostic when switching push provider flags in backend config.
+
+## Notes
+
+- This frontend is for BlueMQ service testing and operations.
+- Do not hardcode app secrets in client-side code.

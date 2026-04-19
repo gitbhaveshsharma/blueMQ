@@ -2,6 +2,11 @@
 
 Production-grade multi-channel notification service built with BullMQ, Redis, Neon (PostgreSQL), and a provider abstraction layer.
 
+## Documentation
+
+- Business and operator guide: DOCUMENTATION.md
+- Developer integration guide: TECHNICAL_IMPLEMENTATION_GUIDE.md
+
 ## Architecture
 
 Client App -> POST /notify -> API Layer -> BullMQ Queues -> Workers -> Providers -> Delivery
@@ -133,7 +138,7 @@ Headers: x-api-key: <your-api-key>
 Body: {
   "user_id": "user_123",
   "type": "fee_due",
-  "channels": ["push", "email", "whatsapp", "inapp"],
+  "channels": ["push", "email", "whatsapp", "in_app"],
   "entity_id": "coaching_center_1",
   "variables": {
     "student_name": "Rahul",
@@ -142,7 +147,8 @@ Body: {
   "user": {
     "email": "rahul@gmail.com",
     "phone": "919876543210",
-    "onesignal_player_id": "abc-123"
+    "onesignal_player_id": "abc-123",
+    "fcm_token": "fcm-device-token"
   },
   "action_url": "https://tutrsy.com/fees",
   "data": { "fee_id": "fee_456" }
@@ -150,6 +156,7 @@ Body: {
 ```
 
 Note: `entity_id` is required when `whatsapp` is in `channels`.
+Push note: if push provider is Firebase, include `fcm_token` (or `firebase_token` / `push_token`) in `user`.
 
 ## WhatsApp Session Management (Meta Only)
 
