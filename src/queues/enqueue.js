@@ -58,7 +58,7 @@ async function enqueueNotification(opts) {
       `${type}:${channel}`, // job name (for dashboard / debugging)
       { ...jobPayload, channel }, // job data
       {
-        jobId: `${notificationId}:${channel}`, // dedupe key
+        jobId: `${notificationId}__${channel}`, // dedupe key (BullMQ custom id cannot contain ":")
       },
     );
 

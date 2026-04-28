@@ -79,6 +79,20 @@ function createChannelWorker(channel) {
             (${notificationId}, ${channel}, 'failed', ${result.provider || channel}, ${result.error || "Unknown error"}, ${attemptNumber})
         `;
 
+        if (result.retryable === false) {
+          await sql`
+            UPDATE notifications
+            SET status = 'failed'
+            WHERE id = ${notificationId}
+              AND status != 'delivered'
+          `;
+
+          console.warn(
+            `[${channel}] ⚠ ${notificationId} non-retryable failure: ${result.error || "Unknown error"}`,
+          );
+          return;
+        }
+
         // Throw so BullMQ retries the job
         throw new Error(
           result.error || `Provider returned failure for ${channel}`,

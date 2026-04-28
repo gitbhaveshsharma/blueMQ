@@ -118,7 +118,12 @@ router.post("/", async (req, res) => {
     if (effectiveChannels.includes("push")) {
       const pushProvider = config.providers.primary.push;
       const hasFirebaseToken = Boolean(
-        user.fcm_token || user.firebase_token || user.push_token,
+        user.fcm_token ||
+        user.fcmToken ||
+        user.firebase_token ||
+        user.firebaseToken ||
+        user.push_token ||
+        user.pushToken,
       );
 
       if (pushProvider === "firebase" && !hasFirebaseToken) {

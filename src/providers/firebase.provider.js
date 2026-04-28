@@ -41,8 +41,52 @@ function getFirebaseApp() {
   );
 }
 
+function normalizeFirebaseToken(rawValue) {
+  if (typeof rawValue !== "string") return null;
+
+  const token = rawValue.trim();
+  if (!token) return null;
+
+  // Some apps store a PushSubscription endpoint URL in push_token.
+  // For FCM-backed web push endpoints, extract the actual registration token.
+  if (/^https?:\/\//i.test(token)) {
+    try {
+      const url = new URL(token);
+      const isFcmHost =
+        url.hostname === "fcm.googleapis.com" ||
+        url.hostname.endsWith(".fcm.googleapis.com");
+      const fcmSendPrefix = "/fcm/send/";
+
+      if (isFcmHost && url.pathname.startsWith(fcmSendPrefix)) {
+        const extracted = decodeURIComponent(
+          url.pathname.slice(fcmSendPrefix.length),
+        ).trim();
+        return extracted || null;
+      }
+    } catch {
+      // Keep original token if it isn't a valid URL.
+    }
+  }
+
+  return token;
+}
+
 function getDeviceToken(user) {
-  return user?.fcm_token || user?.firebase_token || user?.push_token || null;
+  const candidates = [
+    user?.fcm_token,
+    user?.fcmToken,
+    user?.firebase_token,
+    user?.firebaseToken,
+    user?.push_token,
+    user?.pushToken,
+  ];
+
+  for (const value of candidates) {
+    const normalized = normalizeFirebaseToken(value);
+    if (normalized) return normalized;
+  }
+
+  return null;
 }
 
 function serializeData(payload) {
@@ -61,6 +105,24 @@ function serializeData(payload) {
   return out;
 }
 
+function isNonRetryableFirebaseError(code, message) {
+  const normalizedCode = String(code || "").toLowerCase();
+  const normalizedMessage = String(message || "").toLowerCase();
+
+  if (
+    normalizedCode === "messaging/invalid-registration-token" ||
+    normalizedCode === "messaging/registration-token-not-registered" ||
+    normalizedCode === "messaging/mismatched-credential"
+  ) {
+    return true;
+  }
+
+  return (
+    normalizedMessage.includes("registration token is not a valid fcm registration token") ||
+    normalizedMessage.includes("requested entity was not found")
+  );
+}
+
 class FirebaseProvider extends INotificationProvider {
   constructor() {
     super("firebase");
@@ -74,6 +136,7 @@ class FirebaseProvider extends INotificationProvider {
         success: false,
         error:
           "User has no Firebase token (expected fcm_token or firebase_token)",
+        retryable: false,
       };
     }
 
@@ -86,7 +149,16 @@ class FirebaseProvider extends INotificationProvider {
 
       return { success: true, providerMessageId };
     } catch (err) {
-      return { success: false, error: err.message || "Firebase send failed" };
+      const errorCode = err?.code || err?.errorInfo?.code || "";
+      const errorMessage = err?.message || "Firebase send failed";
+      const retryable = !isNonRetryableFirebaseError(errorCode, errorMessage);
+
+      return {
+        success: false,
+        error: errorCode ? `${errorCode}: ${errorMessage}` : errorMessage,
+        errorCode,
+        retryable,
+      };
     }
   }
 }
