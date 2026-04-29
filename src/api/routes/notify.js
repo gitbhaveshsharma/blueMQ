@@ -145,6 +145,10 @@ router.post("/", async (req, res) => {
       ),
     ];
 
+    console.log(
+      `[notify] Template lookup — app_id=${appId}, type=${type}, candidates=[${templateCandidates.join(", ")}]`,
+    );
+
     const templates = await sql`
       SELECT channel, title, body, cta_text
       FROM templates
@@ -154,6 +158,10 @@ router.post("/", async (req, res) => {
         AND is_active = true
       ORDER BY updated_at DESC
     `;
+
+    console.log(
+      `[notify] Found ${templates.length} template(s)${templates.length > 0 ? `: [${templates.map((t) => `${t.channel}: "${t.title}"`).join(", ")}]` : ""}`,
+    );
 
     // Build a map: channel → rendered template
     const templateMap = {};
@@ -177,6 +185,9 @@ router.post("/", async (req, res) => {
     const resolvedChannels = [];
     for (const ch of effectiveChannels) {
       if (!templateMap[ch]) {
+        console.warn(
+          `[notify] ⚠ No template found for channel "${ch}" — using fallback`,
+        );
         // Use a generic template
         templateMap[ch] = {
           title: variables?.title || type.replace(/_/g, " "),

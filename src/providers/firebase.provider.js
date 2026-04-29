@@ -141,10 +141,21 @@ class FirebaseProvider extends INotificationProvider {
     }
 
     try {
+      // Send as a data-only message (no `notification` field).
+      // This prevents the browser from auto-displaying a generic notification
+      // and gives the service worker full control over the display (custom icon,
+      // click action, deduplication via tag, etc.).
+      const fcmData = {
+        title: payload.title || "",
+        body: payload.body || "",
+        ...serializeData(payload),
+      };
+
+      console.log("[firebase] Sending data-only message:", JSON.stringify({ token: token.slice(0, 20) + "...", data: fcmData }));
+
       const providerMessageId = await this.messaging.send({
         token,
-        notification: { title: payload.title, body: payload.body },
-        data: serializeData(payload),
+        data: fcmData,
       });
 
       return { success: true, providerMessageId };
