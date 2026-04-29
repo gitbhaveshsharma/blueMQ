@@ -1,6 +1,7 @@
 const { Worker } = require("bullmq");
 const { getRedisConnection } = require("../queues/connection");
 const { registry } = require("../providers/registry");
+const { getAppProvider } = require("../providers/per-app-factory");
 const { getDb } = require("../db");
 const config = require("../config");
 
@@ -9,9 +10,10 @@ const config = require("../config");
  *
  * Every worker follows the same pattern:
  *   1. Pick job from queue
- *   2. Call registry.send(channel, payload)
- *   3. Log result to notification_logs
- *   4. Update parent notification status
+ *   2. Resolve provider (per-app credentials → server default)
+ *   3. Send via resolved provider
+ *   4. Log result to notification_logs
+ *   5. Update parent notification status
  *
  * @param {string} channel — push | email | sms | whatsapp | inapp
  * @returns {Worker}
@@ -24,7 +26,7 @@ function createChannelWorker(channel) {
   const worker = new Worker(
     queueName,
     async (job) => {
-      const { notificationId, title, body, ctaText, user, actionUrl, data } =
+      const { notificationId, appId, title, body, ctaText, user, actionUrl, data } =
         job.data;
 
       const attemptNumber = job.attemptsMade + 1;
@@ -42,8 +44,36 @@ function createChannelWorker(channel) {
         data,
       };
 
-      // ─── Send through provider registry ───
-      const result = await registry.send(channel, payload);
+      // ─── Resolve provider: per-app credentials → server default ───
+      const methodMap = {
+        push: "sendPush",
+        email: "sendEmail",
+        sms: "sendSMS",
+        whatsapp: "sendWhatsApp",
+        inapp: "sendInApp",
+      };
+      const method = methodMap[channel];
+
+      let result;
+      let providerName;
+
+      if (appId && channel !== "whatsapp" && channel !== "inapp") {
+        try {
+          const resolved = await getAppProvider(appId, channel);
+          providerName = resolved.providerName;
+          result = await resolved.provider[method](payload);
+          result = { ...result, provider: providerName };
+        } catch (providerErr) {
+          console.warn(
+            `[${channel}] Per-app provider failed for ${appId}, falling back to registry: ${providerErr.message}`,
+          );
+          result = await registry.send(channel, payload);
+          providerName = result.provider;
+        }
+      } else {
+        result = await registry.send(channel, payload);
+        providerName = result.provider;
+      }
 
       // ─── Log the result ───
       const sql = getDb();

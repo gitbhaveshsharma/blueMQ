@@ -19,6 +19,7 @@ const notificationsRoutes = require("./api/routes/notifications");
 const templatesRoutes = require("./api/routes/templates");
 const whatsappSessionsRoutes = require("./api/routes/whatsapp-sessions");
 const authRoutes = require("./api/routes/auth");
+const settingsRoutes = require("./api/routes/settings");
 
 function createExpressApp() {
   const app = express();
@@ -42,6 +43,7 @@ function registerRoutes(app) {
   app.use("/notifications", authMiddleware, notificationsRoutes);
   app.use("/templates", authMiddleware, templatesRoutes);
   app.use("/whatsapp", authMiddleware, whatsappSessionsRoutes);
+  app.use("/settings", settingsRoutes);
 }
 
 function registerHttpHandlers(app) {

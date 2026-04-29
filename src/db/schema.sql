@@ -181,3 +181,53 @@ CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_parent_lookup
 -- Fast lookup for webhook → DB row mapping
 CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_waha
   ON whatsapp_sessions (waha_session);
+
+-- 6. Per-app provider credentials & routing
+-- Each app stores their own notification provider API keys and chooses
+-- which provider to use per channel (push, email, sms).
+-- Falls back to server-level .env credentials if not configured.
+CREATE TABLE IF NOT EXISTS app_provider_credentials (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id                VARCHAR(64) NOT NULL UNIQUE REFERENCES apps(app_id),
+
+  -- Provider Routing (which provider per channel)
+  provider_push         VARCHAR(32)  DEFAULT NULL,
+  provider_email        VARCHAR(32)  DEFAULT NULL,
+  provider_sms          VARCHAR(32)  DEFAULT NULL,
+
+  -- Firebase Cloud Messaging
+  firebase_project_id   TEXT DEFAULT NULL,
+  firebase_client_email TEXT DEFAULT NULL,
+  firebase_private_key  TEXT DEFAULT NULL,
+
+  -- OneSignal
+  onesignal_app_id      TEXT DEFAULT NULL,
+  onesignal_api_key     TEXT DEFAULT NULL,
+
+  -- Resend (Email)
+  resend_api_key        TEXT DEFAULT NULL,
+  resend_from_email     TEXT DEFAULT NULL,
+
+  -- Timestamps
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE app_provider_credentials
+  DROP CONSTRAINT IF EXISTS chk_provider_push;
+ALTER TABLE app_provider_credentials
+  ADD CONSTRAINT chk_provider_push
+  CHECK (provider_push IS NULL OR provider_push IN ('firebase', 'onesignal'));
+
+ALTER TABLE app_provider_credentials
+  DROP CONSTRAINT IF EXISTS chk_provider_email;
+ALTER TABLE app_provider_credentials
+  ADD CONSTRAINT chk_provider_email
+  CHECK (provider_email IS NULL OR provider_email IN ('resend', 'onesignal'));
+
+ALTER TABLE app_provider_credentials
+  DROP CONSTRAINT IF EXISTS chk_provider_sms;
+ALTER TABLE app_provider_credentials
+  ADD CONSTRAINT chk_provider_sms
+  CHECK (provider_sms IS NULL OR provider_sms IN ('onesignal'));
+

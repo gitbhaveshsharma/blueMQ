@@ -10,6 +10,7 @@ import SendPage from './pages/SendPage';
 import NotificationsPage from './pages/NotificationsPage';
 import WhatsAppPage from './pages/WhatsAppPage';
 import ProfilePage from './pages/ProfilePage';
+import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/send" element={<SendPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/whatsapp" element={<WhatsAppPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
         </Route>

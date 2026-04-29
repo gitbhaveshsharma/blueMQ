@@ -9,6 +9,7 @@ import {
   LogOut,
   Menu,
   User,
+  Settings,
 } from 'lucide-react';
 import { createElement, useState } from 'react';
 
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { to: '/send', label: 'Send', icon: Send },
   { to: '/notifications', label: 'Notifications', icon: Bell },
   { to: '/whatsapp', label: 'WhatsApp', icon: MessageSquare },
+  { to: '/settings', label: 'Settings', icon: Settings },
   { to: '/profile', label: 'Profile', icon: User },
 ];
 

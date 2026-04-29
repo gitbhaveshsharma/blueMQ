@@ -169,6 +169,15 @@ class ApiClient {
       },
     );
   }
+
+  // ── Settings / Credentials ──
+  getCredentials() {
+    return this.#request("GET", "/settings/credentials");
+  }
+
+  updateCredentials(data) {
+    return this.#request("PUT", "/settings/credentials", { body: data });
+  }
 }
 
 export const api = new ApiClient();
