@@ -1,6 +1,7 @@
 const axios = require("axios");
 const { INotificationProvider } = require("./interface");
 const config = require("../config");
+const { buildEmailHtml } = require("../utils/email");
 
 const ONESIGNAL_API = "https://onesignal.com/api/v1";
 
@@ -70,11 +71,19 @@ class OneSignalProvider extends INotificationProvider {
       return { success: false, error: "User has no email address" };
     }
 
+    const emailHtml = buildEmailHtml({
+      title,
+      body,
+      ctaText: payload.ctaText,
+      actionUrl: payload.actionUrl,
+      bodyFormat: payload.bodyFormat,
+    });
+
     const reqBody = {
       app_id: this.appId,
       include_email_tokens: [user.email],
       email_subject: title,
-      email_body: `<html><body>${body}</body></html>`,
+      email_body: emailHtml,
     };
 
     try {

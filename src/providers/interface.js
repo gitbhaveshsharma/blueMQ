@@ -35,6 +35,7 @@ class INotificationProvider {
    * @param {string} payload.notificationId
    * @param {string} payload.title
    * @param {string} payload.body
+   * @param {string} payload.bodyFormat   — text | html (email only)
    * @param {string} payload.actionUrl
    * @param {string} payload.ctaText
    * @param {object} payload.user          — { onesignal_player_id, fcm_token, email, phone, ... }

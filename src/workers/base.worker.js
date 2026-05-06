@@ -26,8 +26,17 @@ function createChannelWorker(channel) {
   const worker = new Worker(
     queueName,
     async (job) => {
-      const { notificationId, appId, title, body, ctaText, user, actionUrl, data } =
-        job.data;
+      const {
+        notificationId,
+        appId,
+        title,
+        body,
+        bodyFormat,
+        ctaText,
+        user,
+        actionUrl,
+        data,
+      } = job.data;
 
       const attemptNumber = job.attemptsMade + 1;
       console.log(
@@ -38,6 +47,7 @@ function createChannelWorker(channel) {
         notificationId,
         title,
         body,
+        bodyFormat,
         ctaText,
         user,
         actionUrl,

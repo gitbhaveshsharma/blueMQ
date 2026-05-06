@@ -9,6 +9,25 @@ const {
 
 const router = Router();
 
+const ALLOWED_BODY_FORMATS = Object.freeze({
+  email: ["text", "html"],
+  default: ["text"],
+});
+
+function normalizeBodyFormat(value) {
+  if (value === undefined || value === null || value === "") {
+    return "text";
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return normalized || "text";
+}
+
+function getAllowedBodyFormats(channel) {
+  return channel === "email"
+    ? ALLOWED_BODY_FORMATS.email
+    : ALLOWED_BODY_FORMATS.default;
+}
+
 /**
  * GET /templates
  *
@@ -86,14 +105,16 @@ router.get("/", async (req, res) => {
  *   channel:  "push",
  *   title:    "Fee Reminder 💰",
  *   body:     "Hi {{student_name}}, your fee of {{amount}} is due",
+ *   body_format: "text",                -- text | html (email only)
  *   cta_text: "View Fee Details"
  * }
  */
 router.post("/", async (req, res) => {
   try {
     const appId = req.appId;
-    const { type, channel, title, body, cta_text } = req.body;
+    const { type, channel, title, body, cta_text, body_format } = req.body;
     const normalizedChannel = normalizePublicChannel(channel);
+    const normalizedBodyFormat = normalizeBodyFormat(body_format);
 
     if (!type || !normalizedChannel || !body) {
       return res.status(400).json({ error: "Required: type, channel, body" });
@@ -102,6 +123,13 @@ router.post("/", async (req, res) => {
     if (!isValidPublicChannel(channel)) {
       return res.status(400).json({
         error: `Invalid channel. Allowed: ${getAllowedPublicChannels().join(", ")}`,
+      });
+    }
+
+    const allowedFormats = getAllowedBodyFormats(normalizedChannel);
+    if (!allowedFormats.includes(normalizedBodyFormat)) {
+      return res.status(400).json({
+        error: `Invalid body_format for ${normalizedChannel}. Allowed: ${allowedFormats.join(", ")}`,
       });
     }
 
@@ -148,11 +176,12 @@ router.post("/", async (req, res) => {
     }
 
     const result = await sql`
-      INSERT INTO templates (app_id, type, channel, title, body, cta_text)
-      VALUES (${appId}, ${type}, ${normalizedChannel}, ${title || null}, ${body}, ${cta_text || null})
+      INSERT INTO templates (app_id, type, channel, title, body, body_format, cta_text)
+      VALUES (${appId}, ${type}, ${normalizedChannel}, ${title || null}, ${body}, ${normalizedBodyFormat}, ${cta_text || null})
       ON CONFLICT (app_id, type, channel) DO UPDATE SET
         title = EXCLUDED.title,
         body = EXCLUDED.body,
+        body_format = EXCLUDED.body_format,
         cta_text = EXCLUDED.cta_text,
         updated_at = now()
       RETURNING *
@@ -179,15 +208,42 @@ router.put("/:id", async (req, res) => {
   try {
     const appId = req.appId;
     const { id } = req.params;
-    const { title, body, cta_text, is_active } = req.body;
+    const { title, body, cta_text, is_active, body_format } = req.body;
 
     const sql = getDb();
+
+    let normalizedBodyFormat = null;
+    if (body_format !== undefined) {
+      normalizedBodyFormat = normalizeBodyFormat(body_format);
+
+      const existing = await sql`
+        SELECT channel
+        FROM templates
+        WHERE id = ${id} AND app_id = ${appId}
+        LIMIT 1
+      `;
+
+      if (existing.length === 0) {
+        return res.status(404).json({ error: "Template not found" });
+      }
+
+      const existingChannel =
+        normalizePublicChannel(existing[0].channel) || existing[0].channel;
+      const allowedFormats = getAllowedBodyFormats(existingChannel);
+
+      if (!allowedFormats.includes(normalizedBodyFormat)) {
+        return res.status(400).json({
+          error: `Invalid body_format for ${existingChannel}. Allowed: ${allowedFormats.join(", ")}`,
+        });
+      }
+    }
 
     const result = await sql`
       UPDATE templates
       SET
         title = COALESCE(${title ?? null}, title),
         body = COALESCE(${body ?? null}, body),
+        body_format = COALESCE(${normalizedBodyFormat ?? null}, body_format),
         cta_text = COALESCE(${cta_text ?? null}, cta_text),
         is_active = COALESCE(${is_active ?? null}, is_active),
         updated_at = now()

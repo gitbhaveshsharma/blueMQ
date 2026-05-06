@@ -12,7 +12,7 @@ const { getQueue } = require("./index");
  * @param {string} opts.appId
  * @param {string} opts.externalUserId
  * @param {string} opts.type            — template type e.g. "fee_due"
- * @param {object} opts.template        — { title, body, ctaText } (already rendered)
+ * @param {object} opts.templatesByChannel — channel -> { title, body, bodyFormat, ctaText }
  * @param {object} opts.user            — { email, phone, onesignal_player_id, ... }
  * @param {string} [opts.actionUrl]
  * @param {object} [opts.data]          — arbitrary extra data
@@ -25,7 +25,7 @@ async function enqueueNotification(opts) {
     appId,
     externalUserId,
     type,
-    template,
+    templatesByChannel,
     user,
     actionUrl,
     data,
@@ -34,25 +34,34 @@ async function enqueueNotification(opts) {
     parentEntityId,
   } = opts;
 
-  const jobPayload = {
-    notificationId,
-    appId,
-    externalUserId,
-    type,
-    title: template.title,
-    body: template.body,
-    ctaText: template.ctaText,
-    user,
-    actionUrl,
-    data,
-    entityId,
-    parentEntityId,
+  const defaultTemplate = templatesByChannel?.[channels?.[0]] || {
+    title: "",
+    body: "",
+    bodyFormat: "text",
+    ctaText: null,
   };
 
   const enqueued = [];
 
   for (const channel of channels) {
     const queue = getQueue(channel);
+
+    const template = templatesByChannel?.[channel] || defaultTemplate;
+    const jobPayload = {
+      notificationId,
+      appId,
+      externalUserId,
+      type,
+      title: template.title,
+      body: template.body,
+      bodyFormat: template.bodyFormat || "text",
+      ctaText: template.ctaText,
+      user,
+      actionUrl,
+      data,
+      entityId,
+      parentEntityId,
+    };
 
     await queue.add(
       `${type}:${channel}`, // job name (for dashboard / debugging)

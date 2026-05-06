@@ -11,6 +11,7 @@ const {
   getTemplateChannelCandidates,
   getAllowedPublicChannels,
   toInternalChannels,
+  toInternalChannel,
   toPublicChannel,
 } = require("../../utils/channel");
 const config = require("../../config");
@@ -150,7 +151,7 @@ router.post("/", async (req, res) => {
     );
 
     const templates = await sql`
-      SELECT channel, title, body, cta_text
+      SELECT channel, title, body, body_format, cta_text
       FROM templates
       WHERE app_id = ${appId}
         AND type = ${type}
@@ -177,6 +178,7 @@ router.post("/", async (req, res) => {
       templateMap[normalizedTemplateChannel] = {
         title: renderTemplate(tpl.title, variables),
         body: renderTemplate(tpl.body, variables),
+        bodyFormat: tpl.body_format || "text",
         ctaText: renderTemplate(tpl.cta_text, variables),
       };
     }
@@ -193,6 +195,7 @@ router.post("/", async (req, res) => {
           title: variables?.title || type.replace(/_/g, " "),
           body:
             variables?.body || variables?.message || `Notification: ${type}`,
+          bodyFormat: "text",
           ctaText: variables?.cta_text || null,
         };
       }
@@ -215,13 +218,20 @@ router.post("/", async (req, res) => {
 
     // ─── 4. Enqueue jobs per channel ───
     const internalChannels = toInternalChannels(resolvedChannels);
+    const templatesByChannel = {};
+
+    for (const channel of resolvedChannels) {
+      const internalChannel = toInternalChannel(channel);
+      if (!internalChannel) continue;
+      templatesByChannel[internalChannel] = templateMap[channel];
+    }
 
     const enqueued = await enqueueNotification({
       notificationId,
       appId,
       externalUserId: user_id,
       type,
-      template: primaryTemplate,
+      templatesByChannel,
       user: { ...user, external_user_id: user_id },
       actionUrl: action_url,
       data,

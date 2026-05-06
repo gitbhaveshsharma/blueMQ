@@ -17,6 +17,7 @@ const admin = require("firebase-admin");
 const { getDb } = require("../db");
 const { registry } = require("./registry");
 const config = require("../config");
+const { buildEmailHtml } = require("../utils/email");
 
 // ─── In-memory cache for per-app credentials & provider instances ───
 
@@ -297,11 +298,19 @@ class PerAppOneSignalProvider extends INotificationProvider {
       return { success: false, error: "User has no email address" };
     }
 
+    const emailHtml = buildEmailHtml({
+      title,
+      body,
+      ctaText: payload.ctaText,
+      actionUrl: payload.actionUrl,
+      bodyFormat: payload.bodyFormat,
+    });
+
     const reqBody = {
       app_id: this.appId,
       include_email_tokens: [user.email],
       email_subject: title,
-      email_body: `<html><body>${body}</body></html>`,
+      email_body: emailHtml,
     };
 
     try {
@@ -345,21 +354,6 @@ class PerAppOneSignalProvider extends INotificationProvider {
 // ─────────────────────────────────────────────
 
 const { Resend } = require("resend");
-
-function buildEmailHtml({ title, body, ctaText, actionUrl }) {
-  const ctaBlock =
-    ctaText && actionUrl
-      ? `<p style="margin: 24px 0 0;"><a href="${actionUrl}" style="display: inline-block; background: #111827; color: #ffffff; text-decoration: none; padding: 10px 16px; border-radius: 8px; font-weight: 600;">${ctaText}</a></p>`
-      : "";
-
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #111827;">
-      <h2 style="margin: 0 0 12px; font-size: 20px;">${title}</h2>
-      <p style="margin: 0; white-space: pre-line; line-height: 1.5;">${body}</p>
-      ${ctaBlock}
-    </div>
-  `;
-}
 
 class PerAppResendProvider extends INotificationProvider {
   constructor(credentials) {

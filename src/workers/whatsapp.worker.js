@@ -29,6 +29,7 @@ function createWhatsAppWorker() {
         parentEntityId,
         title,
         body,
+        bodyFormat,
         ctaText,
         user,
         actionUrl,
@@ -43,11 +44,12 @@ function createWhatsAppWorker() {
       );
 
       // ─── 1. Lookup active WhatsApp session for this entity ───
-      const { session, isInherited, resolvedEntityId } = await resolveWhatsAppSession(sql, {
-        appId,
-        entityId,
-        parentEntityId,
-      });
+      const { session, isInherited, resolvedEntityId } =
+        await resolveWhatsAppSession(sql, {
+          appId,
+          entityId,
+          parentEntityId,
+        });
 
       if (!session) {
         const reason = entityId
@@ -124,6 +126,7 @@ function createWhatsAppWorker() {
         notificationId,
         title,
         body,
+        bodyFormat,
         ctaText,
         user,
         actionUrl,
@@ -132,7 +135,8 @@ function createWhatsAppWorker() {
         metaPhoneNumberId: session.meta_phone_number_id,
       };
 
-      const requestLabel = entityId || parentEntityId || resolvedEntityId || "unknown entity";
+      const requestLabel =
+        entityId || parentEntityId || resolvedEntityId || "unknown entity";
       const inheritanceLabel = isInherited
         ? entityId
           ? `, inherited from ${resolvedEntityId}`
