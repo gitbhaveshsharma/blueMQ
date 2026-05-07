@@ -7,8 +7,11 @@
  * Usage: node scripts/test-db-connection.js
  */
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
+const { installConsoleInterceptors } = require("../src/logger");
 const { testConnection, getDb } = require("../src/db");
+
+installConsoleInterceptors();
 
 async function main() {
   console.log("═══════════════════════════════════════════");

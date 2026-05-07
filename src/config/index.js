@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const { buildProviderRouting } = require("./provider-routing");
 const { buildRedisConfig } = require("./redis-runtime");
 

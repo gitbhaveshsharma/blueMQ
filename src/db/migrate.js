@@ -1,6 +1,11 @@
+require("dotenv").config({ quiet: true });
+
 const fs = require("fs");
 const path = require("path");
+const { installConsoleInterceptors } = require("../logger");
 const { getDb, executeWithRetry, testConnection } = require("./index");
+
+installConsoleInterceptors();
 
 /**
  * Run the schema.sql file against Neon to create / update tables.

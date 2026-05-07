@@ -165,6 +165,7 @@ export default function TemplatesPage() {
   const channelConfig = getTemplateChannelConfig(form.channel);
   const PreviewRenderer =
     PREVIEW_RENDERERS[channelConfig.previewType] || PreviewCard;
+  const titleLabel = channelConfig.titleLabel || "Title";
   const bodyLabel = channelConfig.supportsTitle ? "Body" : "Message";
   const showFormatSelect = (channelConfig.formats || []).length > 1;
 
@@ -471,7 +472,7 @@ export default function TemplatesPage() {
                 {channelConfig.supportsTitle ? (
                   <div>
                     <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Title
+                      {titleLabel}
                     </label>
                     <input
                       type="text"

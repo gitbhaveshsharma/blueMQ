@@ -1,4 +1,5 @@
 const { getDb } = require("../../db");
+const { setRequestContext } = require("../../logger");
 
 /**
  * Middleware: validate `x-api-key` header.
@@ -25,6 +26,7 @@ async function authMiddleware(req, res, next) {
 
     req.appId = rows[0].app_id;
     req.appName = rows[0].name;
+    setRequestContext({ appId: req.appId });
     next();
   } catch (err) {
     console.error("[auth] DB lookup failed:", err.message);

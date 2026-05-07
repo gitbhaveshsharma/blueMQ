@@ -11,9 +11,8 @@ function normalizeBodyFormat(value) {
   return value === "html" ? "html" : "text";
 }
 
-function buildEmailHtml({ title, body, ctaText, actionUrl, bodyFormat }) {
+function buildEmailHtml({ body, ctaText, actionUrl, bodyFormat }) {
   const format = normalizeBodyFormat(bodyFormat);
-  const safeTitle = escapeHtml(title ?? "");
   const safeCtaText = escapeHtml(ctaText ?? "");
   const safeActionUrl = escapeHtml(actionUrl ?? "");
 
@@ -31,7 +30,6 @@ function buildEmailHtml({ title, body, ctaText, actionUrl, bodyFormat }) {
 
   return `
     <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #111827;">
-      <h2 style="margin: 0 0 12px; font-size: 20px;">${safeTitle}</h2>
       ${bodyMarkup}
       ${ctaBlock}
     </div>

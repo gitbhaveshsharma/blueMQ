@@ -49,6 +49,9 @@ DATABASE_URL=postgres://...
 REDIS_URL=redis://...
 BASE_URL=https://your-domain.com
 SERVICE_API_KEY_SECRET=your-service-secret
+LOG_LEVEL=info
+LOG_TIMEZONE=Asia/Kolkata
+LOG_INTERCEPT_CONSOLE=true
 
 # Provider routing
 PROVIDER_PUSH_ONESIGNAL=true
@@ -58,6 +61,8 @@ PROVIDER_EMAIL_RESEND=true
 PROVIDER_SMS_ONESIGNAL=true
 PROVIDER_WHATSAPP_META=true
 ```
+
+Logging defaults to Winston with colored output, endpoint + request-id context, and timezone-aware timestamps.
 
 ### 4. Test database connection
 

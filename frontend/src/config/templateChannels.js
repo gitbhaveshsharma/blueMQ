@@ -24,6 +24,7 @@ export const TEMPLATE_CHANNELS = Object.freeze([
     label: "Email",
     description: "Email subject and body. HTML is allowed when selected.",
     supportsTitle: true,
+    titleLabel: "Subject",
     supportsCta: true,
     formats: ["text", "html"],
     defaultFormat: "text",
