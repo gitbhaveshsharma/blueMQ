@@ -221,12 +221,68 @@ Rendering behavior:
 
 For a tenant app, BlueMQ provides:
 
-- `GET /notifications/:userId` (paginated)
+- `GET /notifications/:userId` (paginated, excludes soft-deleted)
+- `GET /notifications/:userId/unread-count` (lightweight badge count)
 - `PATCH /notifications/:notificationId/read`
 - `POST /notifications/:userId/read-all`
+- `DELETE /notifications/:notificationId` (soft-delete, sets `is_removed = true`)
 - `GET /notifications/:notificationId/logs`
 
 Use these to power in-app notification center and delivery diagnostics.
+
+### 12.1 Soft Delete
+
+The `DELETE /notifications/:notificationId` endpoint performs a soft delete by setting `is_removed = true`. The notification remains in the database for audit purposes but is excluded from all inbox queries and counts.
+
+A `notification_deleted` WebSocket event is broadcast to connected clients.
+
+### 12.2 Unread Count
+
+`GET /notifications/:userId/unread-count` returns only `{ success: true, unread_count: N }`. Use this for initial badge load and after WebSocket reconnects to avoid fetching the full inbox.
+
+## 12.5 Real-Time WebSocket
+
+BlueMQ exposes a WebSocket server at `ws://<host>:<port>/ws` for real-time notification delivery.
+
+### Connection
+
+Clients connect with query parameters:
+
+```
+ws://your-bluemq-host:3001/ws?api_key=<your-api-key>&user_id=<user-id>
+```
+
+- `api_key`: tenant API key (same as `x-api-key` header)
+- `user_id`: the user whose notifications to subscribe to
+
+Authentication is validated on connection. Invalid keys receive a `4001` close code.
+
+### Events
+
+All messages are JSON with `{ event, data }` shape:
+
+| Event | When | Data |
+|-------|------|------|
+| `new_notification` | In-app notification delivered | Full notification row |
+| `notification_deleted` | Notification soft-deleted | `{ id, was_read }` |
+
+### Heartbeat
+
+The server sends ping frames every 30 seconds. Clients that don't respond are terminated.
+
+### Multi-Tenant
+
+Connections are scoped to `appId + userId`. A broadcast to one user never reaches another app's users.
+
+### Best Practices
+
+- Reconnect with exponential backoff on disconnect
+- Fetch `GET /notifications/:userId/unread-count` after reconnect to sync state
+- Keep WS connection alive in the background (don't disconnect on tab blur)
+
+## 12.6 Notification Retention
+
+Notifications are retained in the database indefinitely. Client apps can implement their own retention policy by periodically calling `DELETE` on old notifications. BlueMQ recommends a 90-day retention display in the UI.
 
 ## 13. Queue and Retry Model
 
@@ -255,7 +311,7 @@ Core tables:
 - `apps`: tenant app registry and API keys.
 - `otps`: register/login OTP lifecycle.
 - `templates`: per app, per type, per channel content.
-- `notifications`: master notification records.
+- `notifications`: master notification records (`is_removed` for soft-delete).
 - `notification_logs`: per-channel attempt logs.
 - `whatsapp_sessions`: per-entity Meta configuration and parent fallback metadata.
 

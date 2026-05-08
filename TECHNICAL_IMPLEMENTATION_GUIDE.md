@@ -422,8 +422,73 @@ export class BlueMqClient {
       },
     );
   }
+
+  async getNotifications(userId: string, page = 1, limit = 20) {
+    return this.request<{ success: boolean; data: any[]; unread_count: number }>(
+      `/notifications/${userId}?page=${page}&limit=${limit}`,
+      { method: "GET" },
+    );
+  }
+
+  async getUnreadCount(userId: string) {
+    return this.request<{ success: boolean; unread_count: number }>(
+      `/notifications/${userId}/unread-count`,
+      { method: "GET" },
+    );
+  }
+
+  async deleteNotification(notificationId: string) {
+    return this.request<{ success: boolean }>(
+      `/notifications/${notificationId}`,
+      { method: "DELETE" },
+    );
+  }
+
+  /** Build a WebSocket URL for real-time notifications */
+  getWsUrl(userId: string): string {
+    const wsBase = this.baseUrl.replace(/^http/, "ws");
+    return `${wsBase}/ws?api_key=${encodeURIComponent(this.apiKey)}&user_id=${encodeURIComponent(userId)}`;
+  }
 }
 ```
+
+### 14.2 WebSocket Integration (Real-Time)
+
+BlueMQ exposes a WebSocket server at `/ws` on the same port as the HTTP API.
+
+#### Connection
+
+```typescript
+const client = new BlueMqClient("https://your-bluemq.example.com", "bmq_your_key");
+const wsUrl = client.getWsUrl("user_123");
+const ws = new WebSocket(wsUrl);
+
+ws.onmessage = (event) => {
+  const { event: eventName, data } = JSON.parse(event.data);
+
+  switch (eventName) {
+    case "new_notification":
+      // data = full notification object (id, type, title, message, etc.)
+      // Update your bell icon badge count
+      // Show a toast/snackbar for in-app notifications
+      break;
+
+    case "notification_deleted":
+      // data = { id, was_read }
+      // Remove from local notification list
+      // Adjust unread count if !was_read
+      break;
+  }
+};
+```
+
+#### Best Practices
+
+- Reconnect with exponential backoff on disconnect
+- Fetch `getUnreadCount()` after reconnect to sync state
+- Keep the WebSocket URL server-side (build via API proxy, not in browser code)
+- Only show toasts for in-app channel notifications (push/email/SMS are handled by their own channels)
+
 
 ## 15. Production Error-Handling Checklist
 

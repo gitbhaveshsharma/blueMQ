@@ -28,6 +28,7 @@ const templatesRoutes = require("./api/routes/templates");
 const whatsappSessionsRoutes = require("./api/routes/whatsapp-sessions");
 const authRoutes = require("./api/routes/auth");
 const settingsRoutes = require("./api/routes/settings");
+const { attachWebSocketServer } = require("./ws");
 
 function createExpressApp() {
   const app = express();
@@ -73,7 +74,14 @@ function startApiServer() {
   registerRoutes(app);
   registerHttpHandlers(app);
 
-  app.listen(config.port, () => {
+  // Use http.createServer so WebSocket can share the same port
+  const http = require("http");
+  const server = http.createServer(app);
+
+  // Attach WebSocket server to the HTTP server
+  attachWebSocketServer(server);
+
+  server.listen(config.port, () => {
     console.log(`[server] Listening on port ${config.port}`);
     console.log("═══════════════════════════════════════════");
   });

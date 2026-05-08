@@ -92,6 +92,17 @@ CREATE INDEX IF NOT EXISTS idx_notifications_app_user
 CREATE INDEX IF NOT EXISTS idx_notifications_status
   ON notifications (status);
 
+-- Soft-delete column: removed notifications are hidden from the inbox
+-- but retained in DB for audit / analytics.
+ALTER TABLE notifications
+  ADD COLUMN IF NOT EXISTS is_removed BOOLEAN NOT NULL DEFAULT false;
+
+-- Fast lookup for inbox queries that exclude removed notifications
+CREATE INDEX IF NOT EXISTS idx_notifications_inbox
+  ON notifications (app_id, external_user_id, is_removed, created_at DESC)
+  WHERE is_removed = false;
+
+
 -- 4. Notification Logs (one row per channel attempt)
 CREATE TABLE IF NOT EXISTS notification_logs (
   id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
