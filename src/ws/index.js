@@ -137,15 +137,26 @@ function attachWebSocketServer(httpServer) {
 function broadcast(appId, userId, event, data) {
   const key = roomKey(appId, userId);
   const room = clients.get(key);
-  if (!room || room.size === 0) return;
+  if (!room || room.size === 0) {
+    console.log(
+      `[ws] broadcast(${event}) — no clients in room ${key}`,
+    );
+    return;
+  }
 
   const message = JSON.stringify({ event, data });
+  let delivered = 0;
 
   for (const ws of room) {
     if (ws.readyState === ws.OPEN) {
       ws.send(message);
+      delivered++;
     }
   }
+
+  console.log(
+    `[ws] broadcast(${event}) — room=${key} size=${room.size} delivered=${delivered}`,
+  );
 }
 
 /**

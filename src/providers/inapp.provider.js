@@ -25,6 +25,7 @@ class InAppProvider extends INotificationProvider {
 
     // Broadcast real-time event to connected WebSocket clients
     const userId = user?.external_user_id;
+
     if (appId && userId) {
       try {
         // Fetch the full notification row for the broadcast payload
@@ -50,11 +51,18 @@ class InAppProvider extends INotificationProvider {
           created_at: new Date().toISOString(),
         };
 
+        console.log(
+          `[inapp] Broadcasting new_notification — app=${appId} user=${userId} notif=${notificationId}`,
+        );
         broadcast(appId, userId, "new_notification", notification);
       } catch (err) {
         // Never fail the delivery because of a broadcast error
         console.warn("[inapp] WebSocket broadcast failed:", err.message);
       }
+    } else {
+      console.warn(
+        `[inapp] Skipping WS broadcast — appId=${appId ?? "MISSING"} userId=${userId ?? "MISSING"}`,
+      );
     }
 
     return {

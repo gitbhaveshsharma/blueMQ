@@ -29,6 +29,7 @@ function createChannelWorker(channel) {
       const {
         notificationId,
         appId,
+        externalUserId,
         title,
         body,
         bodyFormat,
@@ -45,6 +46,8 @@ function createChannelWorker(channel) {
 
       const payload = {
         notificationId,
+        appId,
+        externalUserId,
         title,
         body,
         bodyFormat,
