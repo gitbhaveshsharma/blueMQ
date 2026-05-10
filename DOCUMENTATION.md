@@ -8,6 +8,7 @@ BlueMQ is a multi-tenant notification platform used by SaaS applications to deli
 - email
 - sms
 - whatsapp
+- call
 - in-app
 
 Developer implementation reference:
@@ -53,12 +54,12 @@ BlueMQ supports process separation:
 
 Worker channel scoping:
 
-- `WORKER_CHANNELS=push,email,sms,whatsapp,inapp`
+- `WORKER_CHANNELS=push,email,sms,whatsapp,call,inapp`
 
 Equivalent CLI flags are also supported:
 
 - `--mode=all|api|worker`
-- `--channels=push,email,sms,whatsapp,inapp`
+- `--channels=push,email,sms,whatsapp,call,inapp`
 
 Important startup behavior:
 
@@ -113,7 +114,10 @@ BlueMQ expects channel-specific recipient data inside `user`:
 - `push` (Firebase mode): requires one of `user.fcm_token`, `user.firebase_token`, `user.push_token`.
 - `email`: `user.email`
 - `sms`: `user.phone`
-- `whatsapp`: `user.phone` plus entity context (`entity_id` or `parent_entity_id`)
+- `whatsapp`:
+  - MSG91 mode: `user.phone`
+  - Meta mode: `user.phone` plus entity context (`entity_id` or `parent_entity_id`)
+- `call`: `user.phone`
 - `in_app`: no external provider identity required beyond `user_id` (mapped internally to `inapp` worker channel)
 
 ## 8. Provider Routing Rules
@@ -128,10 +132,16 @@ PROVIDER_PUSH_FIREBASE=false
 
 PROVIDER_EMAIL_ONESIGNAL=false
 PROVIDER_EMAIL_RESEND=true
+PROVIDER_EMAIL_MSG91=false
 
 PROVIDER_SMS_ONESIGNAL=true
+PROVIDER_SMS_TWILIO=false
+PROVIDER_SMS_MSG91=false
 
 PROVIDER_WHATSAPP_META=true
+PROVIDER_WHATSAPP_MSG91=false
+
+PROVIDER_CALL_MSG91=true
 ```
 
 Notes:
@@ -166,16 +176,20 @@ If a template for a channel is missing, BlueMQ falls back to generated content:
 
 If `channels` includes `whatsapp` and neither `entity_id` nor `parent_entity_id` is provided:
 
-- BlueMQ drops `whatsapp` from delivery if other channels remain.
-- BlueMQ returns `400` only when WhatsApp was the only requested channel.
+- When WhatsApp provider resolves to Meta, BlueMQ drops `whatsapp` from delivery if other channels remain.
+- For Meta-only requests, BlueMQ returns `400`.
+- When WhatsApp provider resolves to MSG91, entity context is not required.
 
 ### 9.3 Push validation behavior
 
 BlueMQ currently enforces Firebase token presence only when Firebase is active for push.
 
-## 10. WhatsApp (Meta Cloud API Only)
+## 10. WhatsApp Providers (MSG91 and Meta)
 
-BlueMQ supports Meta WhatsApp Cloud API only.
+BlueMQ supports WhatsApp through:
+
+- MSG91 (direct send)
+- Meta Cloud API (entity-session based)
 
 Session endpoints:
 
@@ -185,7 +199,7 @@ Session endpoints:
 - `POST /whatsapp/sessions/:entity_id/test-message`
 - `DELETE /whatsapp/sessions/:entity_id` (disconnect and clear stored Meta token)
 
-### 10.1 Parent fallback model
+### 10.1 Meta parent fallback model
 
 Each entity can optionally reference `parent_entity_id`.
 
@@ -202,7 +216,8 @@ Response fields indicate fallback status:
 
 ### 10.2 WhatsApp worker semantics
 
-- Missing active session is treated as a non-transient failure (logged, no retry throw in that branch).
+- MSG91 route: sends directly using app-level MSG91 credentials.
+- Meta route: resolves entity session first; missing active session is treated as non-transient failure.
 - Provider/API failures are retried according to worker retry config.
 
 ## 11. Templates and Variables
@@ -292,6 +307,7 @@ One queue per channel:
 - `notifications-email`
 - `notifications-sms`
 - `notifications-whatsapp`
+- `notifications-call`
 - `notifications-inapp`
 
 Configured retries (`attempts = retries + 1`):
@@ -300,6 +316,7 @@ Configured retries (`attempts = retries + 1`):
 - email: retries `3`
 - sms: retries `5`
 - whatsapp: retries `5`
+- call: retries `5`
 - inapp: retries `2`
 
 Backoff policy is channel-specific and configured in `src/config/index.js`.
@@ -314,6 +331,7 @@ Core tables:
 - `notifications`: master notification records (`is_removed` for soft-delete).
 - `notification_logs`: per-channel attempt logs.
 - `whatsapp_sessions`: per-entity Meta configuration and parent fallback metadata.
+- `app_provider_credentials`: per-app routing and provider credentials (Firebase, OneSignal, Resend, Twilio, MSG91).
 
 ## 15. Environment Configuration
 
@@ -344,6 +362,8 @@ Core tables:
 
 - OneSignal: `ONESIGNAL_APP_ID`, `ONESIGNAL_API_KEY`
 - Resend: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`
+- Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
+- MSG91: `MSG91_AUTH_KEY`, `MSG91_WHATSAPP_NUMBER`, `MSG91_FLOW_BASE_URL`, `MSG91_SMS_FLOW_ID`, `MSG91_EMAIL_FLOW_ID`, `MSG91_CALL_FLOW_ID`
 - Firebase (single JSON): `FIREBASE_SERVICE_ACCOUNT_JSON`
 - Firebase (split fields): `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
 
@@ -415,11 +435,18 @@ Do not hardcode them per tenant inside business logic.
 
 ### 21.2 WhatsApp failures
 
-- Confirm active entity session in `GET /whatsapp/sessions/:entity_id`.
-- If using parent fallback, confirm `parent_entity_id` and parent status.
-- Test directly with `POST /whatsapp/sessions/:entity_id/test-message`.
+- If using MSG91, verify app-level MSG91 auth key + integrated number in settings.
+- If using Meta, confirm active entity session in `GET /whatsapp/sessions/:entity_id`.
+- If using Meta parent fallback, confirm `parent_entity_id` and parent status.
+- For Meta, test directly with `POST /whatsapp/sessions/:entity_id/test-message`.
 
-### 21.3 Queue backlog
+### 21.3 Call failures
+
+- Verify `call` channel is included in notify request.
+- Verify app-level/provider-level MSG91 auth key and call flow ID.
+- Verify `user.phone` is present and valid.
+
+### 21.4 Queue backlog
 
 - Inspect `GET /health` queue counters.
 - Scale worker processes for overloaded channels.

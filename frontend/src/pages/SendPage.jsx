@@ -101,7 +101,7 @@ export default function SendPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className=" space-y-6">
       <div>
         <h2 className="text-xl font-bold text-gray-900">Send Notification</h2>
         <p className="text-sm text-gray-500">

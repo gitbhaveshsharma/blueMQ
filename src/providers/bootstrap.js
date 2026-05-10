@@ -1,7 +1,7 @@
 /**
  * Bootstrap the provider registry — wire up channel → provider mappings.
  *
- * Provider selection for push/email/sms is config-driven:
+ * Provider selection for push/email/sms/whatsapp/call is config-driven:
  *   - src/config/provider-routing.js
  *   - env flags: PROVIDER_* (e.g. PROVIDER_PUSH_FIREBASE=true)
  *
@@ -10,9 +10,8 @@
  *   2. Add a factory here
  *   3. Add channel flag in provider-routing config
  *
- * WhatsApp is Meta Cloud API only.
- *
- * The getWhatsAppProvider() helper returns the Meta provider instance.
+ * The getWhatsAppProvider() helper returns the Meta provider instance
+ * used by the WhatsApp session APIs.
  */
 
 const { registry } = require("./registry");
@@ -21,6 +20,8 @@ const { OneSignalProvider } = require("./onesignal.provider");
 const { FirebaseProvider } = require("./firebase.provider");
 const { ResendProvider } = require("./resend.provider");
 const { MetaWhatsAppProvider } = require("./meta-whatsapp.provider");
+const { MSG91Provider } = require("./msg91.provider");
+const { TwilioProvider } = require("./twilio.provider");
 const { InAppProvider } = require("./inapp.provider");
 
 // Provider instances (created once at startup)
@@ -33,6 +34,8 @@ function createProviderFactories() {
     onesignal: () => (cache.onesignal ||= new OneSignalProvider()),
     firebase: () => (cache.firebase ||= new FirebaseProvider()),
     resend: () => (cache.resend ||= new ResendProvider()),
+    twilio: () => (cache.twilio ||= new TwilioProvider()),
+    msg91: () => (cache.msg91 ||= new MSG91Provider()),
     inapp: () => (cache.inapp ||= new InAppProvider()),
     meta: () => (cache.meta ||= new MetaWhatsAppProvider()),
   };
@@ -56,6 +59,7 @@ function bootstrapProviders() {
   registerPrimaryChannel("email", primary.email, factories);
   registerPrimaryChannel("sms", primary.sms, factories);
   registerPrimaryChannel("whatsapp", primary.whatsapp, factories);
+  registerPrimaryChannel("call", primary.call, factories);
   registerPrimaryChannel("inapp", primary.inapp, factories);
   metaWhatsAppProvider = factories.meta();
 

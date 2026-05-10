@@ -1,4 +1,4 @@
-const DEFAULT_CHANNELS = ["push", "email", "sms", "whatsapp", "inapp"];
+const DEFAULT_CHANNELS = ["push", "email", "sms", "whatsapp", "call", "inapp"];
 const { normalizeWorkerChannel } = require("./src/utils/channel");
 
 function parseWorkerChannels(raw) {

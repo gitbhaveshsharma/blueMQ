@@ -16,8 +16,10 @@
 const admin = require("firebase-admin");
 const { getDb } = require("../db");
 const { registry } = require("./registry");
-const config = require("../config");
 const { buildEmailHtml } = require("../utils/email");
+const { TwilioProvider } = require("./twilio.provider");
+const { MSG91Provider } = require("./msg91.provider");
+const { getWhatsAppProvider } = require("./bootstrap");
 
 // ─── In-memory cache for per-app credentials & provider instances ───
 
@@ -46,13 +48,24 @@ async function getAppCredentials(appId) {
       provider_push,
       provider_email,
       provider_sms,
+      provider_whatsapp,
+      provider_call,
       firebase_project_id,
       firebase_client_email,
       firebase_private_key,
       onesignal_app_id,
       onesignal_api_key,
       resend_api_key,
-      resend_from_email
+      resend_from_email,
+      twilio_account_sid,
+      twilio_auth_token,
+      twilio_from_number,
+      msg91_auth_key,
+      msg91_whatsapp_number,
+      msg91_flow_base_url,
+      msg91_sms_flow_id,
+      msg91_email_flow_id,
+      msg91_call_flow_id
     FROM app_provider_credentials
     WHERE app_id = ${appId}
     LIMIT 1
@@ -389,6 +402,37 @@ class PerAppResendProvider extends INotificationProvider {
 }
 
 // ─────────────────────────────────────────────
+//  Twilio provider with per-app credentials
+// ─────────────────────────────────────────────
+
+class PerAppTwilioProvider extends TwilioProvider {
+  constructor(credentials) {
+    super({
+      accountSid: credentials.twilio_account_sid,
+      authToken: credentials.twilio_auth_token,
+      fromNumber: credentials.twilio_from_number,
+    });
+  }
+}
+
+// ─────────────────────────────────────────────
+//  MSG91 provider with per-app credentials
+// ─────────────────────────────────────────────
+
+class PerAppMSG91Provider extends MSG91Provider {
+  constructor(credentials) {
+    super({
+      authKey: credentials.msg91_auth_key,
+      whatsappNumber: credentials.msg91_whatsapp_number,
+      flowBaseUrl: credentials.msg91_flow_base_url,
+      smsFlowId: credentials.msg91_sms_flow_id,
+      emailFlowId: credentials.msg91_email_flow_id,
+      callFlowId: credentials.msg91_call_flow_id,
+    });
+  }
+}
+
+// ─────────────────────────────────────────────
 //  Main entry: getAppProvider
 // ─────────────────────────────────────────────
 
@@ -400,12 +444,11 @@ class PerAppResendProvider extends INotificationProvider {
  *   2. Server-level singleton from registry (.env)
  *
  * @param {string} appId
- * @param {'push'|'email'|'sms'|'whatsapp'|'inapp'} channel
+ * @param {'push'|'email'|'sms'|'whatsapp'|'call'|'inapp'} channel
  * @returns {Promise<{provider: INotificationProvider, providerName: string}>}
  */
 async function getAppProvider(appId, channel) {
-  // WhatsApp and InApp always use the server-level provider
-  if (channel === "whatsapp" || channel === "inapp") {
+  if (channel === "inapp") {
     return {
       provider: registry.getProvider(channel),
       providerName: registry.getProvider(channel).name,
@@ -423,14 +466,14 @@ async function getAppProvider(appId, channel) {
   }
 
   // Determine which provider the app chose for this channel
-  const providerChoice =
-    channel === "push"
-      ? credentials.provider_push
-      : channel === "email"
-        ? credentials.provider_email
-        : channel === "sms"
-          ? credentials.provider_sms
-          : null;
+  const providerChoiceByChannel = {
+    push: credentials.provider_push,
+    email: credentials.provider_email,
+    sms: credentials.provider_sms,
+    whatsapp: credentials.provider_whatsapp,
+    call: credentials.provider_call,
+  };
+  const providerChoice = providerChoiceByChannel[channel] || null;
 
   // If no provider choice, fall back to server default
   if (!providerChoice) {
@@ -474,6 +517,74 @@ async function getAppProvider(appId, channel) {
 
       const provider = new PerAppOneSignalProvider(credentials);
       return { provider, providerName: "onesignal" };
+    }
+
+    if (providerChoice === "twilio" && channel === "sms") {
+      if (
+        !credentials.twilio_account_sid ||
+        !credentials.twilio_auth_token ||
+        !credentials.twilio_from_number
+      ) {
+        console.warn(
+          `[per-app-factory] App ${appId} chose Twilio but has incomplete credentials — falling back to server default`,
+        );
+        return {
+          provider: registry.getProvider(channel),
+          providerName: registry.getProvider(channel).name,
+        };
+      }
+
+      const provider = new PerAppTwilioProvider(credentials);
+      return { provider, providerName: "twilio" };
+    }
+
+    if (
+      providerChoice === "msg91" &&
+      ["sms", "email", "whatsapp", "call"].includes(channel)
+    ) {
+      if (!credentials.msg91_auth_key) {
+        console.warn(
+          `[per-app-factory] App ${appId} chose MSG91 but has no auth key — falling back to server default`,
+        );
+        return {
+          provider: registry.getProvider(channel),
+          providerName: registry.getProvider(channel).name,
+        };
+      }
+
+      const flowIdByChannel = {
+        sms: credentials.msg91_sms_flow_id,
+        email: credentials.msg91_email_flow_id,
+        call: credentials.msg91_call_flow_id,
+      };
+      const requiredFlowId = flowIdByChannel[channel];
+
+      if (channel === "whatsapp" && !credentials.msg91_whatsapp_number) {
+        console.warn(
+          `[per-app-factory] App ${appId} chose MSG91 for WhatsApp but has no integrated number — falling back to server default`,
+        );
+        return {
+          provider: registry.getProvider(channel),
+          providerName: registry.getProvider(channel).name,
+        };
+      }
+
+      if (["sms", "email", "call"].includes(channel) && !requiredFlowId) {
+        console.warn(
+          `[per-app-factory] App ${appId} chose MSG91 for ${channel} but has no flow ID — falling back to server default`,
+        );
+        return {
+          provider: registry.getProvider(channel),
+          providerName: registry.getProvider(channel).name,
+        };
+      }
+
+      const provider = new PerAppMSG91Provider(credentials);
+      return { provider, providerName: "msg91" };
+    }
+
+    if (providerChoice === "meta" && channel === "whatsapp") {
+      return { provider: getWhatsAppProvider(), providerName: "meta-whatsapp" };
     }
 
     if (providerChoice === "resend" && channel === "email") {

@@ -20,12 +20,19 @@ function getProviderFlags() {
     email: {
       onesignal: parseBooleanEnv("PROVIDER_EMAIL_ONESIGNAL", false),
       resend: parseBooleanEnv("PROVIDER_EMAIL_RESEND", true),
+      msg91: parseBooleanEnv("PROVIDER_EMAIL_MSG91", false),
     },
     sms: {
       onesignal: parseBooleanEnv("PROVIDER_SMS_ONESIGNAL", true),
+      twilio: parseBooleanEnv("PROVIDER_SMS_TWILIO", false),
+      msg91: parseBooleanEnv("PROVIDER_SMS_MSG91", false),
     },
     whatsapp: {
       meta: parseBooleanEnv("PROVIDER_WHATSAPP_META", true),
+      msg91: parseBooleanEnv("PROVIDER_WHATSAPP_MSG91", false),
+    },
+    call: {
+      msg91: parseBooleanEnv("PROVIDER_CALL_MSG91", true),
     },
   };
 }
@@ -54,6 +61,7 @@ function buildProviderRouting() {
       email: resolveChannelProvider("email", flags.email),
       sms: resolveChannelProvider("sms", flags.sms),
       whatsapp: resolveChannelProvider("whatsapp", flags.whatsapp),
+      call: resolveChannelProvider("call", flags.call),
       inapp: "inapp",
     },
   };

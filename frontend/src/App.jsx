@@ -1,16 +1,17 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
-import ProtectedRoute from './components/ProtectedRoute';
-import DashboardLayout from './components/DashboardLayout';
-import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
-import DashboardPage from './pages/DashboardPage';
-import TemplatesPage from './pages/TemplatesPage';
-import SendPage from './pages/SendPage';
-import NotificationsPage from './pages/NotificationsPage';
-import WhatsAppPage from './pages/WhatsAppPage';
-import ProfilePage from './pages/ProfilePage';
-import SettingsPage from './pages/SettingsPage';
+import { Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "./context/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
+import DashboardLayout from "./components/DashboardLayout";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import DashboardPage from "./pages/DashboardPage";
+import TemplatesPage from "./pages/TemplatesPage";
+import SendPage from "./pages/SendPage";
+import NotificationsPage from "./pages/NotificationsPage";
+import NotificationLogsPage from "./pages/NotificationLogsPage";
+import WhatsAppPage from "./pages/WhatsAppPage";
+import ProfilePage from "./pages/ProfilePage";
+import SettingsPage from "./pages/SettingsPage";
 
 export default function App() {
   return (
@@ -27,6 +28,10 @@ export default function App() {
             <Route path="/templates" element={<TemplatesPage />} />
             <Route path="/send" element={<SendPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
+            <Route
+              path="/notification-logs"
+              element={<NotificationLogsPage />}
+            />
             <Route path="/whatsapp" element={<WhatsAppPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/profile" element={<ProfilePage />} />

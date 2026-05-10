@@ -72,7 +72,9 @@ function PreviewChat({ body, tone }) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4">
       <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${toneClass}`}>
-        <div className={hasBody ? "whitespace-pre-wrap" : "text-gray-400 italic"}>
+        <div
+          className={hasBody ? "whitespace-pre-wrap" : "text-gray-400 italic"}
+        >
           {hasBody ? body : "No message yet"}
         </div>
       </div>
@@ -330,12 +332,24 @@ export default function TemplatesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Type</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Channel</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Title</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600 hidden md:table-cell">Body</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
-                <th className="px-4 py-3 text-right font-medium text-gray-600">Actions</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">
+                  Type
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">
+                  Channel
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">
+                  Title
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600 hidden md:table-cell">
+                  Body
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">
+                  Status
+                </th>
+                <th className="px-4 py-3 text-right font-medium text-gray-600">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -346,11 +360,14 @@ export default function TemplatesPage() {
                     key={tpl.id}
                     className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50"
                   >
-                    <td className="px-4 py-3 font-mono text-xs text-gray-700">{tpl.type}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-700">
+                      {tpl.type}
+                    </td>
                     <td className="px-4 py-3">
                       <span
                         className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          rowChannelConfig.badgeClass || "bg-gray-50 text-gray-700"
+                          rowChannelConfig.badgeClass ||
+                          "bg-gray-50 text-gray-700"
                         }`}
                       >
                         {rowChannelConfig.label || tpl.channel}
@@ -403,7 +420,9 @@ export default function TemplatesPage() {
       {showModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-6"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowModal(false);
+          }}
         >
           {/*
             max-w-2xl  → wider (672 px) instead of the old max-w-lg (512 px)
@@ -411,7 +430,6 @@ export default function TemplatesPage() {
             flex flex-col → lets header / footer stay fixed while body scrolls
           */}
           <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
-
             {/* ── Sticky header ───────────────────────────────────────────────── */}
             <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100 shrink-0">
               <div>
@@ -432,8 +450,11 @@ export default function TemplatesPage() {
 
             {/* ── Scrollable body ─────────────────────────────────────────────── */}
             <div className="overflow-y-auto flex-1 px-6 py-5">
-              <form id="template-form" onSubmit={handleSave} className="space-y-4">
-
+              <form
+                id="template-form"
+                onSubmit={handleSave}
+                className="space-y-4"
+              >
                 {/* Type + Channel */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
@@ -443,7 +464,9 @@ export default function TemplatesPage() {
                     <input
                       type="text"
                       value={form.type}
-                      onChange={(e) => setForm({ ...form, type: e.target.value })}
+                      onChange={(e) =>
+                        setForm({ ...form, type: e.target.value })
+                      }
                       placeholder="fee_due"
                       disabled={!!editingId}
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-gray-50 disabled:text-gray-500"
@@ -477,8 +500,12 @@ export default function TemplatesPage() {
                     <input
                       type="text"
                       value={form.title}
-                      onChange={(e) => setForm({ ...form, title: e.target.value })}
-                      placeholder={channelConfig.titlePlaceholder || "Template title"}
+                      onChange={(e) =>
+                        setForm({ ...form, title: e.target.value })
+                      }
+                      placeholder={
+                        channelConfig.titlePlaceholder || "Template title"
+                      }
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     />
                   </div>
@@ -492,7 +519,9 @@ export default function TemplatesPage() {
                     </label>
                     <select
                       value={form.body_format}
-                      onChange={(e) => setForm({ ...form, body_format: e.target.value })}
+                      onChange={(e) =>
+                        setForm({ ...form, body_format: e.target.value })
+                      }
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     >
                       {channelConfig.formats.map((format) => (
@@ -513,11 +542,15 @@ export default function TemplatesPage() {
                     value={form.body}
                     onChange={(e) => setForm({ ...form, body: e.target.value })}
                     rows={4}
-                    placeholder={channelConfig.bodyPlaceholder || "Template message"}
+                    placeholder={
+                      channelConfig.bodyPlaceholder || "Template message"
+                    }
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   />
                   <div className="mt-1 space-y-0.5 text-xs text-gray-400">
-                    {channelConfig.bodyHelp ? <p>{channelConfig.bodyHelp}</p> : null}
+                    {channelConfig.bodyHelp ? (
+                      <p>{channelConfig.bodyHelp}</p>
+                    ) : null}
                     <p>Use {"{{variable}}"} placeholders for dynamic content</p>
                   </div>
                 </div>
@@ -531,8 +564,12 @@ export default function TemplatesPage() {
                     <input
                       type="text"
                       value={form.cta_text}
-                      onChange={(e) => setForm({ ...form, cta_text: e.target.value })}
-                      placeholder={channelConfig.ctaPlaceholder || "View details"}
+                      onChange={(e) =>
+                        setForm({ ...form, cta_text: e.target.value })
+                      }
+                      placeholder={
+                        channelConfig.ctaPlaceholder || "View details"
+                      }
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     />
                   </div>
@@ -541,8 +578,12 @@ export default function TemplatesPage() {
                 {/* Preview */}
                 <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-700">Preview</span>
-                    <span className="text-xs text-gray-400">{channelConfig.label}</span>
+                    <span className="text-sm font-medium text-gray-700">
+                      Preview
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      {channelConfig.label}
+                    </span>
                   </div>
                   <PreviewRenderer
                     title={form.title}
@@ -552,7 +593,6 @@ export default function TemplatesPage() {
                     tone={channelConfig.previewTone}
                   />
                 </div>
-
               </form>
             </div>
 
@@ -574,12 +614,10 @@ export default function TemplatesPage() {
                 {saving ? "Saving…" : editingId ? "Update" : "Create"}
               </button>
             </div>
-
           </div>
         </div>
       )}
       {/* ─────────────────────────────────────────────────────────────────────── */}
-
     </div>
   );
 }

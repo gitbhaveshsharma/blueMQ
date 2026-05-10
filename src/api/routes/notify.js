@@ -15,6 +15,7 @@ const {
   toPublicChannel,
 } = require("../../utils/channel");
 const config = require("../../config");
+const { getAppProvider } = require("../../providers/per-app-factory");
 
 const router = Router();
 
@@ -32,7 +33,7 @@ const router = Router();
  * {
  *   user_id:       "user_123",             — your app's user id
  *   type:          "fee_due",              — template type
- *   channels:      ["push", "email"],      — which channels to fire
+ *   channels:      ["push", "email"],      — which channels to fire (push/email/sms/whatsapp/in_app)
  *   variables:     { student_name: "Rahul", amount: "₹5,000" },
  *   user: {                                — delivery addresses
  *     email:               "rahul@gmail.com",
@@ -90,11 +91,26 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // If whatsapp requested but neither child nor parent entity is provided,
+    let whatsappRequiresEntity = false;
+    if (normalizedChannels.includes("whatsapp")) {
+      try {
+        const { providerName } = await getAppProvider(appId, "whatsapp");
+        whatsappRequiresEntity = ["meta", "meta-whatsapp"].includes(
+          String(providerName || "").toLowerCase(),
+        );
+      } catch (providerErr) {
+        console.warn(
+          `[notify] Failed to resolve WhatsApp provider for ${appId}, assuming Meta requirements: ${providerErr.message}`,
+        );
+        whatsappRequiresEntity = true;
+      }
+    }
+
+    // If whatsapp requested with Meta provider but entity context is missing,
     // warn and drop WhatsApp from the delivery set.
     let effectiveChannels = [...normalizedChannels];
     if (
-      normalizedChannels.includes("whatsapp") &&
+      whatsappRequiresEntity &&
       !resolvedEntityId &&
       !resolvedParentEntityId
     ) {

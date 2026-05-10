@@ -1,26 +1,32 @@
-import { NavLink, Outlet } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { NavLink, Outlet } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import {
   LayoutDashboard,
   Send,
   FileText,
   Bell,
+  BarChart3,
   MessageSquare,
   LogOut,
   Menu,
   User,
   Settings,
-} from 'lucide-react';
-import { createElement, useState } from 'react';
+} from "lucide-react";
+import { createElement, useState } from "react";
 
 const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/templates', label: 'Templates', icon: FileText },
-  { to: '/send', label: 'Send', icon: Send },
-  { to: '/notifications', label: 'Notifications', icon: Bell },
-  { to: '/whatsapp', label: 'WhatsApp', icon: MessageSquare },
-  { to: '/settings', label: 'Settings', icon: Settings },
-  { to: '/profile', label: 'Profile', icon: User },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/templates", label: "Templates", icon: FileText },
+  { to: "/send", label: "Send", icon: Send },
+  { to: "/notifications", label: "Notifications", icon: Bell },
+  {
+    to: "/notification-logs",
+    label: "Notification Logs",
+    icon: BarChart3,
+  },
+  { to: "/whatsapp", label: "WhatsApp", icon: MessageSquare },
+  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/profile", label: "Profile", icon: User },
 ];
 
 export default function DashboardLayout() {
@@ -42,7 +48,7 @@ export default function DashboardLayout() {
         className={`
           fixed inset-y-0 left-0 z-30 w-64 transform bg-gray-900 text-white transition-transform duration-200
           lg:static lg:translate-x-0
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         `}
       >
         <div className="flex h-16 items-center gap-2 border-b border-gray-800 px-6">
@@ -61,8 +67,8 @@ export default function DashboardLayout() {
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                   isActive
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                    ? "bg-indigo-600 text-white"
+                    : "text-gray-300 hover:bg-gray-800 hover:text-white"
                 }`
               }
             >
@@ -79,11 +85,15 @@ export default function DashboardLayout() {
             className="mb-2 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
           >
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
-              {(auth?.appName || 'A').charAt(0).toUpperCase()}
+              {(auth?.appName || "A").charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0">
-              <p className="truncate text-xs font-medium text-gray-200">{auth?.appName || 'My App'}</p>
-              <p className="truncate text-xs text-gray-400">{auth?.appId || '—'}</p>
+              <p className="truncate text-xs font-medium text-gray-200">
+                {auth?.appName || "My App"}
+              </p>
+              <p className="truncate text-xs text-gray-400">
+                {auth?.appId || "—"}
+              </p>
             </div>
           </NavLink>
           <button
@@ -107,7 +117,7 @@ export default function DashboardLayout() {
             <Menu size={20} />
           </button>
           <h1 className="text-lg font-semibold text-gray-800">
-            {auth?.appName || 'BlueMQ Dashboard'}
+            {auth?.appName || "BlueMQ Dashboard"}
           </h1>
         </header>
 

@@ -36,7 +36,7 @@ function createQueues() {
 
 /**
  * Get a queue by channel name.
- * @param {'push'|'email'|'sms'|'whatsapp'|'inapp'} channel
+ * @param {'push'|'email'|'sms'|'whatsapp'|'call'|'inapp'} channel
  * @returns {Queue}
  */
 function getQueue(channel) {

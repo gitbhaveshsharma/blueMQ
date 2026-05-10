@@ -195,7 +195,7 @@ CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_waha
 
 -- 6. Per-app provider credentials & routing
 -- Each app stores their own notification provider API keys and chooses
--- which provider to use per channel (push, email, sms).
+-- which provider to use per channel (push, email, sms, whatsapp, call).
 -- Falls back to server-level .env credentials if not configured.
 CREATE TABLE IF NOT EXISTS app_provider_credentials (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -205,6 +205,8 @@ CREATE TABLE IF NOT EXISTS app_provider_credentials (
   provider_push         VARCHAR(32)  DEFAULT NULL,
   provider_email        VARCHAR(32)  DEFAULT NULL,
   provider_sms          VARCHAR(32)  DEFAULT NULL,
+  provider_whatsapp     VARCHAR(32)  DEFAULT NULL,
+  provider_call         VARCHAR(32)  DEFAULT NULL,
 
   -- Firebase Cloud Messaging
   firebase_project_id   TEXT DEFAULT NULL,
@@ -219,10 +221,46 @@ CREATE TABLE IF NOT EXISTS app_provider_credentials (
   resend_api_key        TEXT DEFAULT NULL,
   resend_from_email     TEXT DEFAULT NULL,
 
+  -- Twilio (SMS)
+  twilio_account_sid    TEXT DEFAULT NULL,
+  twilio_auth_token     TEXT DEFAULT NULL,
+  twilio_from_number    TEXT DEFAULT NULL,
+
+  -- MSG91 (SMS/Email/WhatsApp/Call)
+  msg91_auth_key        TEXT DEFAULT NULL,
+  msg91_whatsapp_number TEXT DEFAULT NULL,
+  msg91_flow_base_url   TEXT DEFAULT NULL,
+  msg91_sms_flow_id     TEXT DEFAULT NULL,
+  msg91_email_flow_id   TEXT DEFAULT NULL,
+  msg91_call_flow_id    TEXT DEFAULT NULL,
+
   -- Timestamps
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS provider_whatsapp VARCHAR(32) DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS provider_call VARCHAR(32) DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS twilio_account_sid TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS twilio_auth_token TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS twilio_from_number TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS msg91_auth_key TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS msg91_whatsapp_number TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS msg91_flow_base_url TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS msg91_sms_flow_id TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS msg91_email_flow_id TEXT DEFAULT NULL;
+ALTER TABLE app_provider_credentials
+  ADD COLUMN IF NOT EXISTS msg91_call_flow_id TEXT DEFAULT NULL;
 
 ALTER TABLE app_provider_credentials
   DROP CONSTRAINT IF EXISTS chk_provider_push;
@@ -234,11 +272,23 @@ ALTER TABLE app_provider_credentials
   DROP CONSTRAINT IF EXISTS chk_provider_email;
 ALTER TABLE app_provider_credentials
   ADD CONSTRAINT chk_provider_email
-  CHECK (provider_email IS NULL OR provider_email IN ('resend', 'onesignal'));
+  CHECK (provider_email IS NULL OR provider_email IN ('resend', 'onesignal', 'msg91'));
 
 ALTER TABLE app_provider_credentials
   DROP CONSTRAINT IF EXISTS chk_provider_sms;
 ALTER TABLE app_provider_credentials
   ADD CONSTRAINT chk_provider_sms
-  CHECK (provider_sms IS NULL OR provider_sms IN ('onesignal'));
+  CHECK (provider_sms IS NULL OR provider_sms IN ('onesignal', 'twilio', 'msg91'));
+
+ALTER TABLE app_provider_credentials
+  DROP CONSTRAINT IF EXISTS chk_provider_whatsapp;
+ALTER TABLE app_provider_credentials
+  ADD CONSTRAINT chk_provider_whatsapp
+  CHECK (provider_whatsapp IS NULL OR provider_whatsapp IN ('meta', 'msg91'));
+
+ALTER TABLE app_provider_credentials
+  DROP CONSTRAINT IF EXISTS chk_provider_call;
+ALTER TABLE app_provider_credentials
+  ADD CONSTRAINT chk_provider_call
+  CHECK (provider_call IS NULL OR provider_call IN ('msg91'));
 

@@ -21,6 +21,7 @@ const config = {
   onesignal: {
     appId: process.env.ONESIGNAL_APP_ID,
     apiKey: process.env.ONESIGNAL_API_KEY,
+    smsFrom: process.env.ONESIGNAL_SMS_FROM || "",
   },
 
   // ─── Firebase Cloud Messaging (Push) ───
@@ -36,6 +37,24 @@ const config = {
     apiKey: process.env.RESEND_API_KEY || "",
     fromEmail:
       process.env.RESEND_FROM_EMAIL || "BlueMQ <onboarding@resend.dev>",
+  },
+
+  // ─── Twilio ───
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID || "",
+    authToken: process.env.TWILIO_AUTH_TOKEN || "",
+    fromNumber: process.env.TWILIO_FROM_NUMBER || "",
+  },
+
+  // ─── MSG91 ───
+  msg91: {
+    authKey: process.env.MSG91_AUTH_KEY || "",
+    whatsappNumber: process.env.MSG91_WHATSAPP_NUMBER || "",
+    flowBaseUrl:
+      process.env.MSG91_FLOW_BASE_URL || "https://control.msg91.com/api/v5",
+    smsFlowId: process.env.MSG91_SMS_FLOW_ID || "",
+    emailFlowId: process.env.MSG91_EMAIL_FLOW_ID || "",
+    callFlowId: process.env.MSG91_CALL_FLOW_ID || "",
   },
 
   // ─── Base URL (for webhook configs) ───
@@ -66,6 +85,11 @@ const config = {
       retries: 5,
       backoff: { type: "exponential", delay: 30000 },
     },
+    call: {
+      concurrency: 5,
+      retries: 5,
+      backoff: { type: "exponential", delay: 30000 },
+    },
     inapp: {
       concurrency: 20,
       retries: 2,
@@ -79,6 +103,7 @@ const config = {
     email: "notifications-email",
     sms: "notifications-sms",
     whatsapp: "notifications-whatsapp",
+    call: "notifications-call",
     inapp: "notifications-inapp",
   },
 

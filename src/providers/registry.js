@@ -24,7 +24,7 @@ class ProviderRegistry {
 
   /**
    * Register the primary provider for a channel.
-   * @param {'push'|'email'|'sms'|'whatsapp'|'inapp'} channel
+   * @param {'push'|'email'|'sms'|'whatsapp'|'call'|'inapp'} channel
    * @param {import('./interface').INotificationProvider} provider
    */
   register(channel, provider) {
@@ -72,6 +72,7 @@ class ProviderRegistry {
       email: "sendEmail",
       sms: "sendSMS",
       whatsapp: "sendWhatsApp",
+      call: "sendCall",
       inapp: "sendInApp",
     };
 

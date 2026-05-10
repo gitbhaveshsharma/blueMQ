@@ -15,7 +15,7 @@ const config = require("../config");
  *   4. Log result to notification_logs
  *   5. Update parent notification status
  *
- * @param {string} channel — push | email | sms | whatsapp | inapp
+ * @param {string} channel — push | email | sms | whatsapp | call | inapp
  * @returns {Worker}
  */
 function createChannelWorker(channel) {
@@ -63,6 +63,7 @@ function createChannelWorker(channel) {
         email: "sendEmail",
         sms: "sendSMS",
         whatsapp: "sendWhatsApp",
+        call: "sendCall",
         inapp: "sendInApp",
       };
       const method = methodMap[channel];
@@ -70,7 +71,7 @@ function createChannelWorker(channel) {
       let result;
       let providerName;
 
-      if (appId && channel !== "whatsapp" && channel !== "inapp") {
+      if (appId && channel !== "inapp") {
         try {
           const resolved = await getAppProvider(appId, channel);
           providerName = resolved.providerName;

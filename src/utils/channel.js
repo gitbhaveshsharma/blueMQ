@@ -15,6 +15,7 @@ const INTERNAL_CHANNELS = Object.freeze([
   "email",
   "sms",
   "whatsapp",
+  "call",
   "inapp",
 ]);
 

@@ -58,6 +58,10 @@ class INotificationProvider {
     throw new NotSupportedError(this.name, "whatsapp");
   }
 
+  async sendCall(_payload) {
+    throw new NotSupportedError(this.name, "call");
+  }
+
   async sendInApp(_payload) {
     throw new NotSupportedError(this.name, "inapp");
   }

@@ -4,6 +4,222 @@ const { broadcast } = require("../../ws");
 
 const router = Router();
 
+function normalizeOptionalText(value) {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * GET /notifications/logs/app
+ *
+ * App-wide notification log analytics with pagination + filters.
+ */
+router.get("/logs/app", async (req, res) => {
+  try {
+    const appId = req.appId;
+    const sql = getDb();
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 20),
+    );
+    const offset = (page - 1) * limit;
+
+    const search = normalizeOptionalText(req.query.search);
+    const channel = normalizeOptionalText(req.query.channel);
+    const status = normalizeOptionalText(req.query.status);
+    const provider = normalizeOptionalText(req.query.provider);
+    const from = normalizeOptionalText(req.query.from);
+    const to = normalizeOptionalText(req.query.to);
+    const requestedDays = parseInt(req.query.days, 10);
+
+    if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res
+        .status(400)
+        .json({ error: "Invalid from date. Use YYYY-MM-DD format." });
+    }
+    if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res
+        .status(400)
+        .json({ error: "Invalid to date. Use YYYY-MM-DD format." });
+    }
+
+    const params = [appId];
+    const whereClauses = ["n.app_id = $1"];
+
+    function addParam(value) {
+      params.push(value);
+      return `$${params.length}`;
+    }
+
+    if (search) {
+      const searchParam = addParam(`%${search.toLowerCase()}%`);
+      whereClauses.push(`(
+        LOWER(n.external_user_id) LIKE ${searchParam}
+        OR LOWER(COALESCE(n.type, '')) LIKE ${searchParam}
+        OR LOWER(COALESCE(n.title, '')) LIKE ${searchParam}
+        OR LOWER(COALESCE(n.message, '')) LIKE ${searchParam}
+        OR LOWER(COALESCE(nl.provider, '')) LIKE ${searchParam}
+        OR CAST(nl.notification_id AS TEXT) ILIKE ${searchParam}
+      )`);
+    }
+
+    if (channel) {
+      const channelParam = addParam(channel.toLowerCase());
+      whereClauses.push(`LOWER(nl.channel) = ${channelParam}`);
+    }
+
+    if (status) {
+      const statusParam = addParam(status.toLowerCase());
+      whereClauses.push(`LOWER(nl.status) = ${statusParam}`);
+    }
+
+    if (provider) {
+      const providerParam = addParam(provider.toLowerCase());
+      whereClauses.push(`LOWER(COALESCE(nl.provider, '')) = ${providerParam}`);
+    }
+
+    if (from) {
+      const fromParam = addParam(from);
+      whereClauses.push(`nl.sent_at >= ${fromParam}::date`);
+    }
+
+    if (to) {
+      const toParam = addParam(to);
+      whereClauses.push(`nl.sent_at < (${toParam}::date + interval '1 day')`);
+    }
+
+    const normalizedDays =
+      Number.isInteger(requestedDays) && requestedDays > 0
+        ? Math.min(requestedDays, 365)
+        : 30;
+
+    if (!from && !to) {
+      const daysParam = addParam(normalizedDays);
+      whereClauses.push(
+        `nl.sent_at >= now() - (${daysParam}::int * interval '1 day')`,
+      );
+    }
+
+    const whereSql = whereClauses.join(" AND ");
+    const baseFrom = `
+      FROM notification_logs nl
+      JOIN notifications n ON n.id = nl.notification_id
+      WHERE ${whereSql}
+    `;
+
+    const listParams = [...params, limit, offset];
+    const listQuery = `
+      SELECT
+        nl.id,
+        nl.notification_id,
+        n.external_user_id,
+        n.type,
+        n.title,
+        n.message,
+        nl.channel,
+        nl.status,
+        nl.provider,
+        nl.provider_message_id,
+        nl.attempt_number,
+        nl.error,
+        nl.sent_at
+      ${baseFrom}
+      ORDER BY nl.sent_at DESC
+      LIMIT $${listParams.length - 1}
+      OFFSET $${listParams.length}
+    `;
+
+    const [
+      listResult,
+      totalResult,
+      summaryResult,
+      channelStatsResult,
+      timelineResult,
+    ] = await Promise.all([
+      sql.query(listQuery, listParams),
+      sql.query(`SELECT count(*)::int AS total ${baseFrom}`, params),
+      sql.query(
+        `
+            SELECT
+              count(*)::int AS total,
+              count(*) FILTER (WHERE nl.status = 'sent')::int AS sent,
+              count(*) FILTER (WHERE nl.status = 'failed')::int AS failed,
+              count(*) FILTER (WHERE nl.status = 'permanently_failed')::int AS permanently_failed,
+              count(*) FILTER (WHERE nl.status = 'pending')::int AS pending,
+              count(DISTINCT nl.notification_id)::int AS notifications
+            ${baseFrom}
+          `,
+        params,
+      ),
+      sql.query(
+        `
+            SELECT
+              nl.channel,
+              count(*)::int AS total,
+              count(*) FILTER (WHERE nl.status = 'sent')::int AS sent,
+              count(*) FILTER (WHERE nl.status IN ('failed', 'permanently_failed'))::int AS failed
+            ${baseFrom}
+            GROUP BY nl.channel
+            ORDER BY total DESC, nl.channel ASC
+          `,
+        params,
+      ),
+      sql.query(
+        `
+            SELECT
+              to_char(date_trunc('day', nl.sent_at), 'YYYY-MM-DD') AS day,
+              count(*)::int AS total,
+              count(*) FILTER (WHERE nl.status = 'sent')::int AS sent,
+              count(*) FILTER (WHERE nl.status IN ('failed', 'permanently_failed'))::int AS failed
+            ${baseFrom}
+            GROUP BY 1
+            ORDER BY 1 ASC
+          `,
+        params,
+      ),
+    ]);
+
+    const total = totalResult.rows[0]?.total || 0;
+    const summary = summaryResult.rows[0] || {
+      total: 0,
+      sent: 0,
+      failed: 0,
+      permanently_failed: 0,
+      pending: 0,
+      notifications: 0,
+    };
+
+    return res.json({
+      success: true,
+      data: listResult.rows || [],
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+      },
+      filters: {
+        search: search || "",
+        channel: channel || "",
+        status: status || "",
+        provider: provider || "",
+        from: from || "",
+        to: to || "",
+        days: !from && !to ? normalizedDays : null,
+      },
+      summary,
+      channel_stats: channelStatsResult.rows || [],
+      timeline: timelineResult.rows || [],
+    });
+  } catch (err) {
+    console.error("[notifications] app logs error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 /**
  * GET /notifications/:userId
  *

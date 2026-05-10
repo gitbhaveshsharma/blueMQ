@@ -1,6 +1,7 @@
 const { Worker } = require("bullmq");
 const { getRedisConnection } = require("../queues/connection");
 const { getWhatsAppProvider } = require("../providers/bootstrap");
+const { getAppProvider } = require("../providers/per-app-factory");
 const { getDb } = require("../db");
 const config = require("../config");
 const { resolveWhatsAppSession } = require("../utils/whatsapp-session");
@@ -8,10 +9,12 @@ const { resolveWhatsAppSession } = require("../utils/whatsapp-session");
 /**
  * WhatsApp worker — custom logic on top of the base pattern.
  *
- * Before calling the provider, we look up the active WhatsApp session
- * for the (appId + entityId) pair and fall back one level to the parent
- * entity when needed. If no active session exists the job is logged as
- * failed and **not** retried (missing session is not transient).
+ * This worker supports provider routing:
+ * - MSG91: direct send (no entity session required)
+ * - Meta: resolves entity/parent session before calling Meta API.
+ *
+ * For Meta, if no active session exists the job is logged as failed and
+ * not retried (missing session is not transient).
  */
 function createWhatsAppWorker() {
   const channel = "whatsapp";
@@ -43,86 +46,7 @@ function createWhatsAppWorker() {
         `[whatsapp] Processing ${notificationId} (attempt ${attemptNumber})`,
       );
 
-      // ─── 1. Lookup active WhatsApp session for this entity ───
-      const { session, isInherited, resolvedEntityId } =
-        await resolveWhatsAppSession(sql, {
-          appId,
-          entityId,
-          parentEntityId,
-        });
-
-      if (!session) {
-        const reason = entityId
-          ? `No active WhatsApp session for entity "${entityId}"${parentEntityId ? ` or parent "${parentEntityId}"` : ""}`
-          : parentEntityId
-            ? `No active WhatsApp session for parent entity "${parentEntityId}"`
-            : "No entity_id provided — cannot resolve WhatsApp session";
-
-        console.warn(`[whatsapp] ⚠ ${notificationId}: ${reason}`);
-
-        await sql`
-          INSERT INTO notification_logs
-            (notification_id, channel, status, provider, error, attempt_number)
-          VALUES
-            (${notificationId}, ${channel}, 'failed', 'unknown', ${reason}, ${attemptNumber})
-        `;
-
-        await sql`
-          UPDATE notifications
-          SET status = 'failed'
-          WHERE id = ${notificationId}
-            AND status != 'delivered'
-        `;
-
-        // Return instead of throw — no point retrying a missing session
-        return;
-      }
-
-      // ─── 2. Send via Meta WhatsApp Cloud API only ───
-      const connectionType = session.connection_type || "meta";
-      if (connectionType !== "meta") {
-        const reason = `Unsupported WhatsApp connection_type "${connectionType}"`;
-
-        await sql`
-          INSERT INTO notification_logs
-            (notification_id, channel, status, provider, error, attempt_number)
-          VALUES
-            (${notificationId}, ${channel}, 'failed', 'meta-whatsapp', ${reason}, ${attemptNumber})
-        `;
-
-        await sql`
-          UPDATE notifications
-          SET status = 'failed'
-          WHERE id = ${notificationId}
-            AND status != 'delivered'
-        `;
-
-        return;
-      }
-
-      if (session.status !== "active") {
-        const reason = `WhatsApp session for entity "${entityId || resolvedEntityId}" is not active`;
-
-        await sql`
-          INSERT INTO notification_logs
-            (notification_id, channel, status, provider, error, attempt_number)
-          VALUES
-            (${notificationId}, ${channel}, 'failed', 'meta-whatsapp', ${reason}, ${attemptNumber})
-        `;
-
-        await sql`
-          UPDATE notifications
-          SET status = 'failed'
-          WHERE id = ${notificationId}
-            AND status != 'delivered'
-        `;
-
-        return;
-      }
-
-      const metaProvider = getWhatsAppProvider();
-
-      const metaPayload = {
+      const basePayload = {
         notificationId,
         title,
         body,
@@ -131,24 +55,131 @@ function createWhatsAppWorker() {
         user,
         actionUrl,
         data,
-        metaApiKey: session.meta_api_key,
-        metaPhoneNumberId: session.meta_phone_number_id,
       };
 
-      const requestLabel =
-        entityId || parentEntityId || resolvedEntityId || "unknown entity";
-      const inheritanceLabel = isInherited
-        ? entityId
-          ? `, inherited from ${resolvedEntityId}`
-          : `, fallback parent ${resolvedEntityId}`
-        : "";
+      let resolvedProvider;
+      let providerName;
 
-      console.log(
-        `[whatsapp] Using Meta provider for ${notificationId} (entity: ${requestLabel}${inheritanceLabel})`,
-      );
+      if (appId) {
+        const resolved = await getAppProvider(appId, "whatsapp");
+        resolvedProvider = resolved.provider;
+        providerName = resolved.providerName || resolved.provider?.name;
+      } else {
+        resolvedProvider = getWhatsAppProvider();
+        providerName = resolvedProvider.name;
+      }
 
-      const result = await metaProvider.sendWhatsApp(metaPayload);
-      result.provider = metaProvider.name;
+      const normalizedProviderName = String(providerName || "")
+        .trim()
+        .toLowerCase();
+      const isMetaProvider =
+        normalizedProviderName === "meta" ||
+        normalizedProviderName === "meta-whatsapp";
+
+      let result;
+
+      if (!isMetaProvider) {
+        result = await resolvedProvider.sendWhatsApp(basePayload);
+        result.provider = providerName || resolvedProvider.name || "unknown";
+      } else {
+        // ─── 1. Lookup active WhatsApp session for this entity ───
+        const { session, isInherited, resolvedEntityId } =
+          await resolveWhatsAppSession(sql, {
+            appId,
+            entityId,
+            parentEntityId,
+          });
+
+        if (!session) {
+          const reason = entityId
+            ? `No active WhatsApp session for entity "${entityId}"${parentEntityId ? ` or parent "${parentEntityId}"` : ""}`
+            : parentEntityId
+              ? `No active WhatsApp session for parent entity "${parentEntityId}"`
+              : "No entity_id provided — cannot resolve WhatsApp session";
+
+          console.warn(`[whatsapp] ⚠ ${notificationId}: ${reason}`);
+
+          await sql`
+            INSERT INTO notification_logs
+              (notification_id, channel, status, provider, error, attempt_number)
+            VALUES
+              (${notificationId}, ${channel}, 'failed', 'meta-whatsapp', ${reason}, ${attemptNumber})
+          `;
+
+          await sql`
+            UPDATE notifications
+            SET status = 'failed'
+            WHERE id = ${notificationId}
+              AND status != 'delivered'
+          `;
+
+          // Return instead of throw — no point retrying a missing session
+          return;
+        }
+
+        // ─── 2. Send via Meta WhatsApp Cloud API ───
+        const connectionType = session.connection_type || "meta";
+        if (connectionType !== "meta") {
+          const reason = `Unsupported WhatsApp connection_type "${connectionType}"`;
+
+          await sql`
+            INSERT INTO notification_logs
+              (notification_id, channel, status, provider, error, attempt_number)
+            VALUES
+              (${notificationId}, ${channel}, 'failed', 'meta-whatsapp', ${reason}, ${attemptNumber})
+          `;
+
+          await sql`
+            UPDATE notifications
+            SET status = 'failed'
+            WHERE id = ${notificationId}
+              AND status != 'delivered'
+          `;
+
+          return;
+        }
+
+        if (session.status !== "active") {
+          const reason = `WhatsApp session for entity "${entityId || resolvedEntityId}" is not active`;
+
+          await sql`
+            INSERT INTO notification_logs
+              (notification_id, channel, status, provider, error, attempt_number)
+            VALUES
+              (${notificationId}, ${channel}, 'failed', 'meta-whatsapp', ${reason}, ${attemptNumber})
+          `;
+
+          await sql`
+            UPDATE notifications
+            SET status = 'failed'
+            WHERE id = ${notificationId}
+              AND status != 'delivered'
+          `;
+
+          return;
+        }
+
+        const metaPayload = {
+          ...basePayload,
+          metaApiKey: session.meta_api_key,
+          metaPhoneNumberId: session.meta_phone_number_id,
+        };
+
+        const requestLabel =
+          entityId || parentEntityId || resolvedEntityId || "unknown entity";
+        const inheritanceLabel = isInherited
+          ? entityId
+            ? `, inherited from ${resolvedEntityId}`
+            : `, fallback parent ${resolvedEntityId}`
+          : "";
+
+        console.log(
+          `[whatsapp] Using Meta provider for ${notificationId} (entity: ${requestLabel}${inheritanceLabel})`,
+        );
+
+        result = await resolvedProvider.sendWhatsApp(metaPayload);
+        result.provider = resolvedProvider.name;
+      }
 
       // ─── 3. Log result ───
       if (result.success) {
@@ -177,12 +208,23 @@ function createWhatsAppWorker() {
           INSERT INTO notification_logs
             (notification_id, channel, status, provider, error, attempt_number)
           VALUES
-            (${notificationId}, ${channel}, 'failed', ${result.provider || "meta-whatsapp"}, ${result.error || "Unknown error"}, ${attemptNumber})
+            (${notificationId}, ${channel}, 'failed', ${result.provider || "unknown"}, ${result.error || "Unknown error"}, ${attemptNumber})
         `;
+
+        if (result.retryable === false) {
+          await sql`
+            UPDATE notifications
+            SET status = 'failed'
+            WHERE id = ${notificationId}
+              AND status != 'delivered'
+          `;
+
+          return;
+        }
 
         throw new Error(
           result.error ||
-            "meta-whatsapp provider returned failure for whatsapp",
+            "provider returned failure for whatsapp",
         );
       }
     },
@@ -212,7 +254,7 @@ function createWhatsAppWorker() {
           INSERT INTO notification_logs
             (notification_id, channel, status, provider, error, attempt_number)
           VALUES
-            (${job.data.notificationId}, ${channel}, 'permanently_failed', 'meta-whatsapp', ${err.message}, ${job.attemptsMade})
+            (${job.data.notificationId}, ${channel}, 'permanently_failed', 'whatsapp', ${err.message}, ${job.attemptsMade})
         `;
 
         await sql`

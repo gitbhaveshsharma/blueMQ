@@ -13,13 +13,14 @@ Client App -> POST /notify -> API Layer -> BullMQ Queues -> Workers -> Providers
 
 ## Channels
 
-| Channel  | Provider              | Concurrency | Retries |
-| -------- | --------------------- | ----------- | ------- |
-| Push     | OneSignal or Firebase | 10          | 3       |
-| Email    | Resend or OneSignal   | 5           | 3       |
-| SMS      | OneSignal             | 5           | 5       |
-| WhatsApp | Meta Cloud API        | 5           | 5       |
-| In-App   | DB (direct)           | 20          | 2       |
+| Channel  | Provider Options                          | Concurrency | Retries |
+| -------- | ----------------------------------------- | ----------- | ------- |
+| Push     | OneSignal or Firebase                     | 10          | 3       |
+| Email    | Resend, OneSignal, or MSG91              | 5           | 3       |
+| SMS      | OneSignal, Twilio, or MSG91              | 5           | 5       |
+| WhatsApp | MSG91 or Meta Cloud API                  | 5           | 5       |
+| Call     | MSG91                                    | 5           | 5       |
+| In-App   | DB (direct)                              | 20          | 2       |
 
 ## Quick Start
 
@@ -29,7 +30,7 @@ Client App -> POST /notify -> API Layer -> BullMQ Queues -> Workers -> Providers
 - Redis (local or managed)
 - Neon database (free tier works)
 - OneSignal account
-- Meta WhatsApp Cloud API credentials
+- Provider credentials based on selected routing (Firebase/OneSignal/Resend/Twilio/MSG91/Meta)
 
 ### 2. Install
 
@@ -58,8 +59,13 @@ PROVIDER_PUSH_ONESIGNAL=true
 PROVIDER_PUSH_FIREBASE=false
 PROVIDER_EMAIL_ONESIGNAL=false
 PROVIDER_EMAIL_RESEND=true
+PROVIDER_EMAIL_MSG91=false
 PROVIDER_SMS_ONESIGNAL=true
+PROVIDER_SMS_TWILIO=false
+PROVIDER_SMS_MSG91=false
 PROVIDER_WHATSAPP_META=true
+PROVIDER_WHATSAPP_MSG91=false
+PROVIDER_CALL_MSG91=true
 ```
 
 Logging defaults to Winston with colored output, endpoint + request-id context, and timezone-aware timestamps.
@@ -160,7 +166,7 @@ Body: {
 }
 ```
 
-Note: `entity_id` is required when `whatsapp` is in `channels`.
+Note: `entity_id` is required for `whatsapp` only when Meta provider is active.
 Push note: if push provider is Firebase, include `fcm_token` (or `firebase_token` / `push_token`) in `user`.
 
 ## WhatsApp Session Management (Meta Only)
@@ -242,6 +248,6 @@ src/
 
 ## Notes
 
-- WhatsApp delivery is Meta Cloud API only.
-- BlueMQ stores per-entity Meta credentials in `whatsapp_sessions`.
+- WhatsApp delivery supports MSG91 and Meta.
+- BlueMQ stores per-entity Meta credentials in `whatsapp_sessions` when Meta is used.
 - Session API key values are masked in read responses.

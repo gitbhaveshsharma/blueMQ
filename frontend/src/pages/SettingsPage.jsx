@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
-import { api } from '../services/api';
-import toast from 'react-hot-toast';
+import { useEffect, useState, useCallback } from "react";
+import { api } from "../services/api";
+import toast from "react-hot-toast";
 import {
   Settings,
   RefreshCw,
@@ -16,21 +16,74 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ─── Provider option definitions ───
 const PUSH_PROVIDERS = [
-  { value: 'firebase', label: 'Firebase Cloud Messaging', icon: Flame, color: 'text-orange-500' },
-  { value: 'onesignal', label: 'OneSignal', icon: Bell, color: 'text-indigo-500' },
+  {
+    value: "firebase",
+    label: "Firebase Cloud Messaging",
+    icon: Flame,
+    color: "text-orange-500",
+  },
+  {
+    value: "onesignal",
+    label: "OneSignal",
+    icon: Bell,
+    color: "text-indigo-500",
+  },
 ];
 
 const EMAIL_PROVIDERS = [
-  { value: 'resend', label: 'Resend', icon: Mail, color: 'text-emerald-500' },
-  { value: 'onesignal', label: 'OneSignal', icon: Bell, color: 'text-indigo-500' },
+  { value: "resend", label: "Resend", icon: Mail, color: "text-emerald-500" },
+  {
+    value: "onesignal",
+    label: "OneSignal",
+    icon: Bell,
+    color: "text-indigo-500",
+  },
+  {
+    value: "msg91",
+    label: "MSG91",
+    icon: MessageSquare,
+    color: "text-blue-500",
+  },
 ];
 
 const SMS_PROVIDERS = [
-  { value: 'onesignal', label: 'OneSignal', icon: MessageSquare, color: 'text-indigo-500' },
+  {
+    value: "onesignal",
+    label: "OneSignal",
+    icon: MessageSquare,
+    color: "text-indigo-500",
+  },
+  {
+    value: "twilio",
+    label: "Twilio",
+    icon: MessageSquare,
+    color: "text-sky-500",
+  },
+  {
+    value: "msg91",
+    label: "MSG91",
+    icon: MessageSquare,
+    color: "text-blue-500",
+  },
+];
+
+const WHATSAPP_PROVIDERS = [
+  {
+    value: "msg91",
+    label: "MSG91",
+    icon: MessageSquare,
+    color: "text-green-600",
+  },
+  {
+    value: "meta",
+    label: "Meta Cloud API",
+    icon: MessageSquare,
+    color: "text-green-500",
+  },
 ];
 
 // ─── Helpers ───
@@ -51,14 +104,20 @@ function ProviderSelect({ label, channel, providers, value, onChange }) {
               type="button"
               onClick={() => onChange(channel, p.value)}
               className={`flex items-center gap-2 rounded-xl border-2 px-4 py-2.5 text-sm font-medium transition-all duration-200
-                ${isActive
-                  ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm'
-                  : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                ${
+                  isActive
+                    ? "border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm"
+                    : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50"
                 }`}
             >
-              <Icon size={16} className={isActive ? p.color : 'text-gray-400'} />
+              <Icon
+                size={16}
+                className={isActive ? p.color : "text-gray-400"}
+              />
               {p.label}
-              {isActive && <CheckCircle size={14} className="text-indigo-500" />}
+              {isActive && (
+                <CheckCircle size={14} className="text-indigo-500" />
+              )}
             </button>
           );
         })}
@@ -76,7 +135,14 @@ function ProviderSelect({ label, channel, providers, value, onChange }) {
   );
 }
 
-function SecretInput({ label, name, value, onChange, placeholder, multiline = false }) {
+function SecretInput({
+  label,
+  name,
+  value,
+  onChange,
+  placeholder,
+  multiline = false,
+}) {
   const [show, setShow] = useState(false);
 
   return (
@@ -89,21 +155,21 @@ function SecretInput({ label, name, value, onChange, placeholder, multiline = fa
           <textarea
             id={name}
             name={name}
-            value={value || ''}
+            value={value || ""}
             onChange={(e) => onChange(name, e.target.value)}
             placeholder={placeholder}
             rows={4}
             className={`flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-mono text-gray-800 placeholder:text-gray-300
               focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all
-              ${!show && value ? 'text-security-disc' : ''}`}
-            style={!show && value ? { WebkitTextSecurity: 'disc' } : {}}
+              ${!show && value ? "text-security-disc" : ""}`}
+            style={!show && value ? { WebkitTextSecurity: "disc" } : {}}
           />
         ) : (
           <input
             id={name}
             name={name}
-            type={show ? 'text' : 'password'}
-            value={value || ''}
+            type={show ? "text" : "password"}
+            value={value || ""}
             onChange={(e) => onChange(name, e.target.value)}
             placeholder={placeholder}
             className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-mono text-gray-800 placeholder:text-gray-300
@@ -114,7 +180,7 @@ function SecretInput({ label, name, value, onChange, placeholder, multiline = fa
           type="button"
           onClick={() => setShow((v) => !v)}
           className="shrink-0 mt-2.5 rounded-lg p-1.5 text-gray-400 hover:text-gray-600 transition-colors"
-          title={show ? 'Hide' : 'Show'}
+          title={show ? "Hide" : "Show"}
         >
           {show ? <EyeOff size={16} /> : <Eye size={16} />}
         </button>
@@ -133,7 +199,7 @@ function TextInput({ label, name, value, onChange, placeholder }) {
         id={name}
         name={name}
         type="text"
-        value={value || ''}
+        value={value || ""}
         onChange={(e) => onChange(name, e.target.value)}
         placeholder={placeholder}
         className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-300
@@ -143,7 +209,15 @@ function TextInput({ label, name, value, onChange, placeholder }) {
   );
 }
 
-function CredentialSection({ title, icon: Icon, color, isOpen, onToggle, hasCredentials, children }) {
+function CredentialSection({
+  title,
+  icon: Icon,
+  color,
+  isOpen,
+  onToggle,
+  hasCredentials,
+  children,
+}) {
   return (
     <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden transition-all duration-200">
       <button
@@ -151,16 +225,22 @@ function CredentialSection({ title, icon: Icon, color, isOpen, onToggle, hasCred
         onClick={onToggle}
         className="flex w-full items-center gap-3 px-6 py-4 text-left hover:bg-gray-50 transition-colors"
       >
-        <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${color}`}>
+        <div
+          className={`flex h-9 w-9 items-center justify-center rounded-xl ${color}`}
+        >
           <Icon size={18} className="text-white" />
         </div>
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
           <p className="text-xs text-gray-400">
-            {hasCredentials ? 'Credentials configured' : 'No credentials set — using server defaults'}
+            {hasCredentials
+              ? "Credentials configured"
+              : "No credentials set — using server defaults"}
           </p>
         </div>
-        {hasCredentials && <CheckCircle size={18} className="text-emerald-500 shrink-0" />}
+        {hasCredentials && (
+          <CheckCircle size={18} className="text-emerald-500 shrink-0" />
+        )}
         {isOpen ? (
           <ChevronDown size={18} className="text-gray-400" />
         ) : (
@@ -185,16 +265,25 @@ export default function SettingsPage() {
   const [providerPush, setProviderPush] = useState(null);
   const [providerEmail, setProviderEmail] = useState(null);
   const [providerSms, setProviderSms] = useState(null);
+  const [providerWhatsapp, setProviderWhatsapp] = useState(null);
 
   // Credentials
   const [creds, setCreds] = useState({
-    firebase_project_id: '',
-    firebase_client_email: '',
-    firebase_private_key: '',
-    onesignal_app_id: '',
-    onesignal_api_key: '',
-    resend_api_key: '',
-    resend_from_email: '',
+    firebase_project_id: "",
+    firebase_client_email: "",
+    firebase_private_key: "",
+    onesignal_app_id: "",
+    onesignal_api_key: "",
+    resend_api_key: "",
+    resend_from_email: "",
+    twilio_account_sid: "",
+    twilio_auth_token: "",
+    twilio_from_number: "",
+    msg91_auth_key: "",
+    msg91_whatsapp_number: "",
+    msg91_flow_base_url: "",
+    msg91_sms_flow_id: "",
+    msg91_email_flow_id: "",
   });
 
   // Existing credential indicators
@@ -202,6 +291,8 @@ export default function SettingsPage() {
     has_firebase_private_key: false,
     has_onesignal_api_key: false,
     has_resend_api_key: false,
+    has_twilio_auth_token: false,
+    has_msg91_auth_key: false,
   });
 
   // Section open states
@@ -209,6 +300,8 @@ export default function SettingsPage() {
     firebase: true,
     onesignal: false,
     resend: false,
+    twilio: false,
+    msg91: false,
   });
 
   const toggleSection = (section) => {
@@ -226,26 +319,37 @@ export default function SettingsPage() {
         setProviderPush(c.provider_push || null);
         setProviderEmail(c.provider_email || null);
         setProviderSms(c.provider_sms || null);
+        setProviderWhatsapp(c.provider_whatsapp || null);
 
         setCreds((prev) => ({
           ...prev,
-          firebase_project_id: c.firebase_project_id || '',
-          firebase_client_email: c.firebase_client_email || '',
-          firebase_private_key: '', // Never pre-fill secrets
-          onesignal_app_id: c.onesignal_app_id || '',
-          onesignal_api_key: '',
-          resend_api_key: '',
-          resend_from_email: c.resend_from_email || '',
+          firebase_project_id: c.firebase_project_id || "",
+          firebase_client_email: c.firebase_client_email || "",
+          firebase_private_key: "", // Never pre-fill secrets
+          onesignal_app_id: c.onesignal_app_id || "",
+          onesignal_api_key: "",
+          resend_api_key: "",
+          resend_from_email: c.resend_from_email || "",
+          twilio_account_sid: c.twilio_account_sid || "",
+          twilio_auth_token: "",
+          twilio_from_number: c.twilio_from_number || "",
+          msg91_auth_key: "",
+          msg91_whatsapp_number: c.msg91_whatsapp_number || "",
+          msg91_flow_base_url: c.msg91_flow_base_url || "",
+          msg91_sms_flow_id: c.msg91_sms_flow_id || "",
+          msg91_email_flow_id: c.msg91_email_flow_id || "",
         }));
 
         setExistingCreds({
           has_firebase_private_key: c.has_firebase_private_key || false,
           has_onesignal_api_key: c.has_onesignal_api_key || false,
           has_resend_api_key: c.has_resend_api_key || false,
+          has_twilio_auth_token: c.has_twilio_auth_token || false,
+          has_msg91_auth_key: c.has_msg91_auth_key || false,
         });
       }
     } catch (err) {
-      toast.error('Failed to load settings: ' + err.message);
+      toast.error("Failed to load settings: " + err.message);
     } finally {
       setLoading(false);
     }
@@ -256,9 +360,10 @@ export default function SettingsPage() {
   }, [fetchCredentials]);
 
   function handleProviderChange(channel, value) {
-    if (channel === 'push') setProviderPush(value);
-    if (channel === 'email') setProviderEmail(value);
-    if (channel === 'sms') setProviderSms(value);
+    if (channel === "push") setProviderPush(value);
+    if (channel === "email") setProviderEmail(value);
+    if (channel === "sms") setProviderSms(value);
+    if (channel === "whatsapp") setProviderWhatsapp(value);
   }
 
   function handleCredChange(name, value) {
@@ -272,22 +377,45 @@ export default function SettingsPage() {
         provider_push: providerPush,
         provider_email: providerEmail,
         provider_sms: providerSms,
+        provider_whatsapp: providerWhatsapp,
+        provider_call: null,
       };
 
       // Only send credential fields if they have values (don't overwrite with empty)
-      if (creds.firebase_project_id) payload.firebase_project_id = creds.firebase_project_id;
-      if (creds.firebase_client_email) payload.firebase_client_email = creds.firebase_client_email;
-      if (creds.firebase_private_key) payload.firebase_private_key = creds.firebase_private_key;
-      if (creds.onesignal_app_id) payload.onesignal_app_id = creds.onesignal_app_id;
-      if (creds.onesignal_api_key) payload.onesignal_api_key = creds.onesignal_api_key;
+      if (creds.firebase_project_id)
+        payload.firebase_project_id = creds.firebase_project_id;
+      if (creds.firebase_client_email)
+        payload.firebase_client_email = creds.firebase_client_email;
+      if (creds.firebase_private_key)
+        payload.firebase_private_key = creds.firebase_private_key;
+      if (creds.onesignal_app_id)
+        payload.onesignal_app_id = creds.onesignal_app_id;
+      if (creds.onesignal_api_key)
+        payload.onesignal_api_key = creds.onesignal_api_key;
       if (creds.resend_api_key) payload.resend_api_key = creds.resend_api_key;
-      if (creds.resend_from_email) payload.resend_from_email = creds.resend_from_email;
+      if (creds.resend_from_email)
+        payload.resend_from_email = creds.resend_from_email;
+      if (creds.twilio_account_sid)
+        payload.twilio_account_sid = creds.twilio_account_sid;
+      if (creds.twilio_auth_token)
+        payload.twilio_auth_token = creds.twilio_auth_token;
+      if (creds.twilio_from_number)
+        payload.twilio_from_number = creds.twilio_from_number;
+      if (creds.msg91_auth_key) payload.msg91_auth_key = creds.msg91_auth_key;
+      if (creds.msg91_whatsapp_number)
+        payload.msg91_whatsapp_number = creds.msg91_whatsapp_number;
+      if (creds.msg91_flow_base_url)
+        payload.msg91_flow_base_url = creds.msg91_flow_base_url;
+      if (creds.msg91_sms_flow_id)
+        payload.msg91_sms_flow_id = creds.msg91_sms_flow_id;
+      if (creds.msg91_email_flow_id)
+        payload.msg91_email_flow_id = creds.msg91_email_flow_id;
 
       await api.updateCredentials(payload);
-      toast.success('Provider settings saved successfully');
+      toast.success("Provider settings saved successfully");
       await fetchCredentials();
     } catch (err) {
-      toast.error('Failed to save: ' + err.message);
+      toast.error("Failed to save: " + err.message);
     } finally {
       setSaving(false);
     }
@@ -302,7 +430,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -311,7 +439,8 @@ export default function SettingsPage() {
             Provider Settings
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Configure your notification provider credentials and routing preferences
+            Configure your notification provider credentials and routing
+            preferences
           </p>
         </div>
         <button
@@ -327,19 +456,21 @@ export default function SettingsPage() {
       <div
         className={`flex items-center gap-3 rounded-xl border px-5 py-3.5 text-sm ${
           configured
-            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-            : 'border-amber-200 bg-amber-50 text-amber-700'
+            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+            : "border-amber-200 bg-amber-50 text-amber-700"
         }`}
       >
         {configured ? (
           <>
             <CheckCircle size={18} />
-            Custom provider credentials are configured. Notifications will use your keys.
+            Custom provider credentials are configured. Notifications will use
+            your keys.
           </>
         ) : (
           <>
             <AlertCircle size={18} />
-            No custom credentials configured. Server-level defaults will be used for all notifications.
+            No custom credentials configured. Server-level defaults will be used
+            for all notifications.
           </>
         )}
       </div>
@@ -348,10 +479,13 @@ export default function SettingsPage() {
       <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm space-y-5">
         <div className="flex items-center gap-2 mb-1">
           <Shield size={18} className="text-indigo-500" />
-          <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Provider Routing</h3>
+          <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+            Provider Routing
+          </h3>
         </div>
         <p className="text-xs text-gray-400 -mt-3">
-          Choose which provider to use for each notification channel. Leave unset to use server defaults.
+          Choose which provider to use for each notification channel. Leave
+          unset to use server defaults.
         </p>
 
         <ProviderSelect
@@ -377,6 +511,14 @@ export default function SettingsPage() {
           value={providerSms}
           onChange={handleProviderChange}
         />
+
+        <ProviderSelect
+          label="WhatsApp"
+          channel="whatsapp"
+          providers={WHATSAPP_PROVIDERS}
+          value={providerWhatsapp}
+          onChange={handleProviderChange}
+        />
       </div>
 
       {/* Firebase Credentials */}
@@ -385,11 +527,13 @@ export default function SettingsPage() {
         icon={Flame}
         color="bg-orange-500"
         isOpen={openSections.firebase}
-        onToggle={() => toggleSection('firebase')}
-        hasCredentials={!!creds.firebase_project_id || existingCreds.has_firebase_private_key}
+        onToggle={() => toggleSection("firebase")}
+        hasCredentials={
+          !!creds.firebase_project_id || existingCreds.has_firebase_private_key
+        }
       >
         <p className="text-xs text-gray-400 mb-2">
-          Get these from your{' '}
+          Get these from your{" "}
           <a
             href="https://console.firebase.google.com/"
             target="_blank"
@@ -397,7 +541,7 @@ export default function SettingsPage() {
             className="text-indigo-500 hover:underline"
           >
             Firebase Console
-          </a>{' '}
+          </a>{" "}
           → Project Settings → Service Accounts → Generate new private key.
         </p>
         <TextInput
@@ -415,7 +559,7 @@ export default function SettingsPage() {
           placeholder="firebase-adminsdk-xxxxx@my-project.iam.gserviceaccount.com"
         />
         <SecretInput
-          label={`Private Key${existingCreds.has_firebase_private_key ? ' (already set — leave blank to keep)' : ''}`}
+          label={`Private Key${existingCreds.has_firebase_private_key ? " (already set — leave blank to keep)" : ""}`}
           name="firebase_private_key"
           value={creds.firebase_private_key}
           onChange={handleCredChange}
@@ -430,11 +574,13 @@ export default function SettingsPage() {
         icon={Bell}
         color="bg-indigo-500"
         isOpen={openSections.onesignal}
-        onToggle={() => toggleSection('onesignal')}
-        hasCredentials={!!creds.onesignal_app_id || existingCreds.has_onesignal_api_key}
+        onToggle={() => toggleSection("onesignal")}
+        hasCredentials={
+          !!creds.onesignal_app_id || existingCreds.has_onesignal_api_key
+        }
       >
         <p className="text-xs text-gray-400 mb-2">
-          Get these from your{' '}
+          Get these from your{" "}
           <a
             href="https://app.onesignal.com/"
             target="_blank"
@@ -442,7 +588,7 @@ export default function SettingsPage() {
             className="text-indigo-500 hover:underline"
           >
             OneSignal Dashboard
-          </a>{' '}
+          </a>{" "}
           → Settings → Keys & IDs.
         </p>
         <TextInput
@@ -453,7 +599,7 @@ export default function SettingsPage() {
           placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
         />
         <SecretInput
-          label={`API Key${existingCreds.has_onesignal_api_key ? ' (already set — leave blank to keep)' : ''}`}
+          label={`API Key${existingCreds.has_onesignal_api_key ? " (already set — leave blank to keep)" : ""}`}
           name="onesignal_api_key"
           value={creds.onesignal_api_key}
           onChange={handleCredChange}
@@ -467,11 +613,13 @@ export default function SettingsPage() {
         icon={Mail}
         color="bg-emerald-500"
         isOpen={openSections.resend}
-        onToggle={() => toggleSection('resend')}
-        hasCredentials={!!creds.resend_from_email || existingCreds.has_resend_api_key}
+        onToggle={() => toggleSection("resend")}
+        hasCredentials={
+          !!creds.resend_from_email || existingCreds.has_resend_api_key
+        }
       >
         <p className="text-xs text-gray-400 mb-2">
-          Get your API key from{' '}
+          Get your API key from{" "}
           <a
             href="https://resend.com/api-keys"
             target="_blank"
@@ -483,7 +631,7 @@ export default function SettingsPage() {
           .
         </p>
         <SecretInput
-          label={`API Key${existingCreds.has_resend_api_key ? ' (already set — leave blank to keep)' : ''}`}
+          label={`API Key${existingCreds.has_resend_api_key ? " (already set — leave blank to keep)" : ""}`}
           name="resend_api_key"
           value={creds.resend_api_key}
           onChange={handleCredChange}
@@ -495,6 +643,100 @@ export default function SettingsPage() {
           value={creds.resend_from_email}
           onChange={handleCredChange}
           placeholder="My App <noreply@mydomain.com>"
+        />
+      </CredentialSection>
+
+      {/* Twilio Credentials */}
+      <CredentialSection
+        title="Twilio (SMS)"
+        icon={MessageSquare}
+        color="bg-sky-500"
+        isOpen={openSections.twilio}
+        onToggle={() => toggleSection("twilio")}
+        hasCredentials={
+          !!creds.twilio_account_sid ||
+          !!creds.twilio_from_number ||
+          existingCreds.has_twilio_auth_token
+        }
+      >
+        <p className="text-xs text-gray-400 mb-2">
+          Use Twilio credentials when SMS provider is set to Twilio.
+        </p>
+        <TextInput
+          label="Account SID"
+          name="twilio_account_sid"
+          value={creds.twilio_account_sid}
+          onChange={handleCredChange}
+          placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        />
+        <SecretInput
+          label={`Auth Token${existingCreds.has_twilio_auth_token ? " (already set — leave blank to keep)" : ""}`}
+          name="twilio_auth_token"
+          value={creds.twilio_auth_token}
+          onChange={handleCredChange}
+          placeholder="twilio_auth_token"
+        />
+        <TextInput
+          label="From Number (E.164)"
+          name="twilio_from_number"
+          value={creds.twilio_from_number}
+          onChange={handleCredChange}
+          placeholder="+15017122661"
+        />
+      </CredentialSection>
+
+      {/* MSG91 Credentials */}
+      <CredentialSection
+        title="MSG91 (SMS, Email, WhatsApp)"
+        icon={MessageSquare}
+        color="bg-blue-500"
+        isOpen={openSections.msg91}
+        onToggle={() => toggleSection("msg91")}
+        hasCredentials={
+          !!creds.msg91_whatsapp_number ||
+          !!creds.msg91_sms_flow_id ||
+          !!creds.msg91_email_flow_id ||
+          existingCreds.has_msg91_auth_key
+        }
+      >
+        <p className="text-xs text-gray-400 mb-2">
+          MSG91 flow IDs are required for SMS and Email. WhatsApp requires your
+          integrated number.
+        </p>
+        <SecretInput
+          label={`Auth Key${existingCreds.has_msg91_auth_key ? " (already set — leave blank to keep)" : ""}`}
+          name="msg91_auth_key"
+          value={creds.msg91_auth_key}
+          onChange={handleCredChange}
+          placeholder="msg91_auth_key"
+        />
+        <TextInput
+          label="WhatsApp Integrated Number"
+          name="msg91_whatsapp_number"
+          value={creds.msg91_whatsapp_number}
+          onChange={handleCredChange}
+          placeholder="9198xxxxxxxx"
+        />
+        <TextInput
+          label="Flow Base URL"
+          name="msg91_flow_base_url"
+          value={creds.msg91_flow_base_url}
+          onChange={handleCredChange}
+          placeholder="https://control.msg91.com/api/v5"
+        />
+        <TextInput
+          label="SMS Flow ID"
+          name="msg91_sms_flow_id"
+          value={creds.msg91_sms_flow_id}
+          onChange={handleCredChange}
+          placeholder="sms_flow_id"
+        />
+        <TextInput
+          label="Email Flow ID"
+          name="msg91_email_flow_id"
+          value={creds.msg91_email_flow_id}
+          onChange={handleCredChange}
+          placeholder="email_flow_id"
         />
       </CredentialSection>
 
@@ -513,19 +755,22 @@ export default function SettingsPage() {
           ) : (
             <Save size={16} />
           )}
-          {saving ? 'Saving...' : 'Save Settings'}
+          {saving ? "Saving..." : "Save Settings"}
         </button>
       </div>
 
       {/* Info note */}
       <div className="rounded-xl border border-gray-100 bg-gray-50 px-5 py-4 text-xs text-gray-400 space-y-1">
         <p>
-          <strong className="text-gray-500">How it works:</strong> When you configure provider credentials here,
-          BlueMQ will use your keys to send notifications. If no credentials are set, server-level defaults are used.
+          <strong className="text-gray-500">How it works:</strong> When you
+          configure provider credentials here, BlueMQ will use your keys to send
+          notifications. If no credentials are set, server-level defaults are
+          used.
         </p>
         <p>
-          <strong className="text-gray-500">WhatsApp:</strong> WhatsApp credentials are managed per-entity
-          in the WhatsApp page and are not affected by these settings.
+          <strong className="text-gray-500">WhatsApp:</strong> If provider is
+          set to Meta Cloud API, configure entity sessions in the WhatsApp page.
+          If provider is MSG91, these settings are used directly.
         </p>
       </div>
     </div>

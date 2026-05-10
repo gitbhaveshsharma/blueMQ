@@ -126,6 +126,32 @@ class ApiClient {
     return this.#request("GET", `/notifications/${notificationId}/logs`);
   }
 
+  getAppNotificationLogs({
+    page = 1,
+    limit = 20,
+    search,
+    channel,
+    status,
+    provider,
+    from,
+    to,
+    days,
+  } = {}) {
+    return this.#request("GET", "/notifications/logs/app", {
+      params: {
+        page,
+        limit,
+        search,
+        channel,
+        status,
+        provider,
+        from,
+        to,
+        days,
+      },
+    });
+  }
+
   // ── WhatsApp Sessions ──
   createWhatsAppSession({
     entityId,

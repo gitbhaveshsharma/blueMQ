@@ -53,7 +53,8 @@ export const TEMPLATE_CHANNELS = Object.freeze([
   {
     id: "whatsapp",
     label: "WhatsApp",
-    description: "Meta Cloud API text messages only.",
+    description:
+      "Text messages for WhatsApp. Provider behavior depends on your routing settings.",
     supportsTitle: false,
     supportsCta: false,
     formats: ["text"],

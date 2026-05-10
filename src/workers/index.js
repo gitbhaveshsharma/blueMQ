@@ -5,6 +5,7 @@ const WORKER_FACTORIES = {
   email: require("./email.worker"),
   sms: require("./sms.worker"),
   whatsapp: require("./whatsapp.worker"),
+  call: require("./call.worker"),
   inapp: require("./inapp.worker"),
 };
 
