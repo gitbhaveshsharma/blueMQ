@@ -13,6 +13,11 @@ const ALLOWED_BODY_FORMATS = Object.freeze({
   email: ["text", "html"],
   default: ["text"],
 });
+const DEFAULT_VARIANT_KEY = "default";
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
 
 function normalizeBodyFormat(value) {
   if (value === undefined || value === null || value === "") {
@@ -26,6 +31,49 @@ function getAllowedBodyFormats(channel) {
   return channel === "email"
     ? ALLOWED_BODY_FORMATS.email
     : ALLOWED_BODY_FORMATS.default;
+}
+
+function normalizeOptionalText(value, { toLowerCase = false } = {}) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return null;
+  }
+  return toLowerCase ? normalized.toLowerCase() : normalized;
+}
+
+function normalizeConditionPayload({ condition_key, condition_value }) {
+  const conditionKey = normalizeOptionalText(condition_key, {
+    toLowerCase: true,
+  });
+  const conditionValue = normalizeOptionalText(condition_value);
+  const hasConditionKey = Boolean(conditionKey);
+  const hasConditionValue = Boolean(conditionValue);
+
+  if (hasConditionKey !== hasConditionValue) {
+    return {
+      error:
+        "condition_key and condition_value must be provided together, or both left empty",
+    };
+  }
+
+  return { conditionKey, conditionValue };
+}
+
+function buildVariantKey(conditionKey, conditionValue) {
+  if (!conditionKey && !conditionValue) {
+    return DEFAULT_VARIANT_KEY;
+  }
+  return `when:${conditionKey}=${String(conditionValue).trim().toLowerCase()}`;
+}
+
+function normalizeTemplateRow(row) {
+  return {
+    ...row,
+    channel: normalizePublicChannel(row.channel) || row.channel,
+  };
 }
 
 /**
@@ -58,13 +106,13 @@ router.get("/", async (req, res) => {
         WHERE app_id = ${appId}
           AND type = ${type}
           AND channel = ANY(${templateChannelCandidates})
-        ORDER BY updated_at DESC
+        ORDER BY updated_at DESC, variant_key ASC
       `;
     } else if (type) {
       rows = await sql`
         SELECT * FROM templates
         WHERE app_id = ${appId} AND type = ${type}
-        ORDER BY updated_at DESC
+        ORDER BY updated_at DESC, variant_key ASC
       `;
     } else if (normalizedChannel) {
       const templateChannelCandidates =
@@ -74,24 +122,48 @@ router.get("/", async (req, res) => {
         SELECT * FROM templates
         WHERE app_id = ${appId}
           AND channel = ANY(${templateChannelCandidates})
-        ORDER BY updated_at DESC
+        ORDER BY updated_at DESC, variant_key ASC
       `;
     } else {
       rows = await sql`
         SELECT * FROM templates
         WHERE app_id = ${appId}
-        ORDER BY type, channel
+        ORDER BY type, channel, variant_key
       `;
     }
 
-    const normalizedRows = rows.map((row) => ({
-      ...row,
-      channel: normalizePublicChannel(row.channel) || row.channel,
-    }));
+    const normalizedRows = rows.map(normalizeTemplateRow);
 
     return res.json({ success: true, data: normalizedRows });
   } catch (err) {
     console.error("[templates] GET error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /templates/:id
+ */
+router.get("/:id", async (req, res) => {
+  try {
+    const appId = req.appId;
+    const { id } = req.params;
+    const sql = getDb();
+
+    const rows = await sql`
+      SELECT *
+      FROM templates
+      WHERE id = ${id} AND app_id = ${appId}
+      LIMIT 1
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Template not found" });
+    }
+
+    return res.json({ success: true, data: normalizeTemplateRow(rows[0]) });
+  } catch (err) {
+    console.error("[templates] GET by id error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -112,11 +184,36 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const appId = req.appId;
-    const { type, channel, title, body, cta_text, body_format } = req.body;
+    const {
+      type,
+      channel,
+      title,
+      body,
+      cta_text,
+      cta_url,
+      body_format,
+      condition_key,
+      condition_value,
+    } = req.body;
+    const normalizedType = normalizeOptionalText(type);
     const normalizedChannel = normalizePublicChannel(channel);
     const normalizedBodyFormat = normalizeBodyFormat(body_format);
+    const normalizedBody = normalizeOptionalText(body);
+    const normalizedTitle = normalizeOptionalText(title);
+    const normalizedCtaText = normalizeOptionalText(cta_text);
+    const normalizedCtaUrl = normalizeOptionalText(cta_url);
+    const normalizedCondition = normalizeConditionPayload({
+      condition_key,
+      condition_value,
+    });
 
-    if (!type || !normalizedChannel || !body) {
+    if (normalizedCondition.error) {
+      return res.status(400).json({ error: normalizedCondition.error });
+    }
+    const { conditionKey, conditionValue } = normalizedCondition;
+    const variantKey = buildVariantKey(conditionKey, conditionValue);
+
+    if (!normalizedType || !normalizedChannel || !normalizedBody) {
       return res.status(400).json({ error: "Required: type, channel, body" });
     }
 
@@ -142,16 +239,22 @@ router.post("/", async (req, res) => {
         SET
           title = legacy.title,
           body = legacy.body,
+          body_format = legacy.body_format,
           cta_text = legacy.cta_text,
+          cta_url = legacy.cta_url,
+          condition_key = legacy.condition_key,
+          condition_value = legacy.condition_value,
           is_active = legacy.is_active,
           updated_at = legacy.updated_at
         FROM templates AS legacy
         WHERE canonical.app_id = ${appId}
-          AND canonical.type = ${type}
+          AND canonical.type = ${normalizedType}
           AND canonical.channel = 'in_app'
+          AND canonical.variant_key = ${variantKey}
           AND legacy.app_id = ${appId}
-          AND legacy.type = ${type}
+          AND legacy.type = ${normalizedType}
           AND legacy.channel = 'inapp'
+          AND COALESCE(legacy.variant_key, ${DEFAULT_VARIANT_KEY}) = ${variantKey}
           AND legacy.updated_at > canonical.updated_at
       `;
 
@@ -159,41 +262,74 @@ router.post("/", async (req, res) => {
         DELETE FROM templates AS legacy
         USING templates AS canonical
         WHERE legacy.app_id = ${appId}
-          AND legacy.type = ${type}
+          AND legacy.type = ${normalizedType}
           AND legacy.channel = 'inapp'
+          AND COALESCE(legacy.variant_key, ${DEFAULT_VARIANT_KEY}) = ${variantKey}
           AND canonical.app_id = ${appId}
-          AND canonical.type = ${type}
+          AND canonical.type = ${normalizedType}
           AND canonical.channel = 'in_app'
+          AND canonical.variant_key = ${variantKey}
       `;
 
       await sql`
         UPDATE templates
         SET channel = 'in_app', updated_at = now()
         WHERE app_id = ${appId}
-          AND type = ${type}
+          AND type = ${normalizedType}
           AND channel = 'inapp'
+          AND COALESCE(variant_key, ${DEFAULT_VARIANT_KEY}) = ${variantKey}
       `;
     }
 
     const result = await sql`
-      INSERT INTO templates (app_id, type, channel, title, body, body_format, cta_text)
-      VALUES (${appId}, ${type}, ${normalizedChannel}, ${title || null}, ${body}, ${normalizedBodyFormat}, ${cta_text || null})
-      ON CONFLICT (app_id, type, channel) DO UPDATE SET
+      INSERT INTO templates (
+        app_id,
+        type,
+        channel,
+        variant_key,
+        condition_key,
+        condition_value,
+        title,
+        body,
+        body_format,
+        cta_text,
+        cta_url
+      )
+      VALUES (
+        ${appId},
+        ${normalizedType},
+        ${normalizedChannel},
+        ${variantKey},
+        ${conditionKey},
+        ${conditionValue},
+        ${normalizedTitle},
+        ${normalizedBody},
+        ${normalizedBodyFormat},
+        ${normalizedCtaText},
+        ${normalizedCtaUrl}
+      )
+      ON CONFLICT (app_id, type, channel, variant_key) DO UPDATE SET
+        condition_key = EXCLUDED.condition_key,
+        condition_value = EXCLUDED.condition_value,
         title = EXCLUDED.title,
         body = EXCLUDED.body,
         body_format = EXCLUDED.body_format,
         cta_text = EXCLUDED.cta_text,
+        cta_url = EXCLUDED.cta_url,
         updated_at = now()
       RETURNING *
     `;
 
-    const normalizedRow = {
-      ...result[0],
-      channel: normalizePublicChannel(result[0].channel) || result[0].channel,
-    };
+    const normalizedRow = normalizeTemplateRow(result[0]);
 
     return res.status(201).json({ success: true, data: normalizedRow });
   } catch (err) {
+    if (err?.code === "23505") {
+      return res.status(409).json({
+        error:
+          "A template with the same type, channel, and condition rule already exists",
+      });
+    }
     console.error("[templates] POST error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -208,27 +344,36 @@ router.put("/:id", async (req, res) => {
   try {
     const appId = req.appId;
     const { id } = req.params;
-    const { title, body, cta_text, is_active, body_format } = req.body;
+    const {
+      title,
+      body,
+      cta_text,
+      cta_url,
+      is_active,
+      body_format,
+      condition_key,
+      condition_value,
+    } = req.body;
 
     const sql = getDb();
+    const existingRows = await sql`
+      SELECT *
+      FROM templates
+      WHERE id = ${id} AND app_id = ${appId}
+      LIMIT 1
+    `;
 
-    let normalizedBodyFormat = null;
+    if (existingRows.length === 0) {
+      return res.status(404).json({ error: "Template not found" });
+    }
+    const existingTemplate = existingRows[0];
+
+    let finalBodyFormat = existingTemplate.body_format || "text";
     if (body_format !== undefined) {
-      normalizedBodyFormat = normalizeBodyFormat(body_format);
-
-      const existing = await sql`
-        SELECT channel
-        FROM templates
-        WHERE id = ${id} AND app_id = ${appId}
-        LIMIT 1
-      `;
-
-      if (existing.length === 0) {
-        return res.status(404).json({ error: "Template not found" });
-      }
-
+      const normalizedBodyFormat = normalizeBodyFormat(body_format);
       const existingChannel =
-        normalizePublicChannel(existing[0].channel) || existing[0].channel;
+        normalizePublicChannel(existingTemplate.channel) ||
+        existingTemplate.channel;
       const allowedFormats = getAllowedBodyFormats(existingChannel);
 
       if (!allowedFormats.includes(normalizedBodyFormat)) {
@@ -236,16 +381,68 @@ router.put("/:id", async (req, res) => {
           error: `Invalid body_format for ${existingChannel}. Allowed: ${allowedFormats.join(", ")}`,
         });
       }
+      finalBodyFormat = normalizedBodyFormat;
+    }
+
+    const hasConditionInput =
+      hasOwn(req.body, "condition_key") || hasOwn(req.body, "condition_value");
+
+    let finalConditionKey = existingTemplate.condition_key;
+    let finalConditionValue = existingTemplate.condition_value;
+    if (hasConditionInput) {
+      const normalizedCondition = normalizeConditionPayload({
+        condition_key,
+        condition_value,
+      });
+      if (normalizedCondition.error) {
+        return res.status(400).json({ error: normalizedCondition.error });
+      }
+      finalConditionKey = normalizedCondition.conditionKey;
+      finalConditionValue = normalizedCondition.conditionValue;
+    }
+    const finalVariantKey = buildVariantKey(
+      finalConditionKey,
+      finalConditionValue,
+    );
+
+    if (hasOwn(req.body, "is_active") && typeof is_active !== "boolean") {
+      return res.status(400).json({ error: "is_active must be a boolean" });
+    }
+
+    const hasBody = hasOwn(req.body, "body");
+    const finalBody = hasBody
+      ? normalizeOptionalText(body)
+      : existingTemplate.body;
+    if (!finalBody) {
+      return res.status(400).json({ error: "body cannot be empty" });
     }
 
     const result = await sql`
       UPDATE templates
       SET
-        title = COALESCE(${title ?? null}, title),
-        body = COALESCE(${body ?? null}, body),
-        body_format = COALESCE(${normalizedBodyFormat ?? null}, body_format),
-        cta_text = COALESCE(${cta_text ?? null}, cta_text),
-        is_active = COALESCE(${is_active ?? null}, is_active),
+        title = ${
+          hasOwn(req.body, "title")
+            ? normalizeOptionalText(title)
+            : existingTemplate.title
+        },
+        body = ${finalBody},
+        body_format = ${finalBodyFormat},
+        cta_text = ${
+          hasOwn(req.body, "cta_text")
+            ? normalizeOptionalText(cta_text)
+            : existingTemplate.cta_text
+        },
+        cta_url = ${
+          hasOwn(req.body, "cta_url")
+            ? normalizeOptionalText(cta_url)
+            : existingTemplate.cta_url
+        },
+        condition_key = ${finalConditionKey},
+        condition_value = ${finalConditionValue},
+        variant_key = ${finalVariantKey},
+        is_active = ${
+          hasOwn(req.body, "is_active") ? is_active : existingTemplate.is_active
+        },
         updated_at = now()
       WHERE id = ${id} AND app_id = ${appId}
       RETURNING *
@@ -255,13 +452,16 @@ router.put("/:id", async (req, res) => {
       return res.status(404).json({ error: "Template not found" });
     }
 
-    const normalizedRow = {
-      ...result[0],
-      channel: normalizePublicChannel(result[0].channel) || result[0].channel,
-    };
+    const normalizedRow = normalizeTemplateRow(result[0]);
 
     return res.json({ success: true, data: normalizedRow });
   } catch (err) {
+    if (err?.code === "23505") {
+      return res.status(409).json({
+        error:
+          "A template with the same type, channel, and condition rule already exists",
+      });
+    }
     console.error("[templates] PUT error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }

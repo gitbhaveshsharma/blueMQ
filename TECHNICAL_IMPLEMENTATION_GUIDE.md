@@ -226,21 +226,34 @@ If whatsapp is requested without entity_id and parent_entity_id:
 Notify loads templates using:
 
 - app_id + type + channel + is_active=true
+- If multiple variants exist, it evaluates `condition_key` + `condition_value` against notify `variables` and picks the best match, else falls back to default variant.
+
+BlueMQ does not impose any preset condition vocabulary. Your product defines the rule key and value names for each variant.
 
 When template is missing, notify generates fallback payload:
 
 - title: variables.title or type (underscores replaced)
 - body: variables.body or variables.message or Notification for the type value
 - ctaText: variables.cta_text or null
+- actionUrl: template `cta_url` or variables.cta_url or request action_url
 
 ## 7. API Contract: Templates
 
 Endpoints:
 
 - GET /templates
+- GET /templates/:id
 - POST /templates
 - PUT /templates/:id
 - DELETE /templates/:id
+
+Template variant fields:
+
+- condition_key (optional)
+- condition_value (optional)
+- cta_url (optional)
+
+These fields are fully user-defined; there are no BlueMQ-specific profile presets.
 
 Current accepted channel values in templates route:
 
@@ -392,7 +405,10 @@ export type BlueMqNotifyRequest = {
 };
 
 export class BlueMqClient {
-  constructor(private baseUrl: string, private apiKey: string) {}
+  constructor(
+    private baseUrl: string,
+    private apiKey: string,
+  ) {}
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
@@ -407,27 +423,33 @@ export class BlueMqClient {
     const body = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(body.error || `BlueMQ request failed: ${response.status}`);
+      throw new Error(
+        body.error || `BlueMQ request failed: ${response.status}`,
+      );
     }
 
     return body as T;
   }
 
   async notify(payload: BlueMqNotifyRequest) {
-    return this.request<{ success: boolean; notification_id: string; channels_enqueued: string[] }>(
-      "/notify",
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-    );
+    return this.request<{
+      success: boolean;
+      notification_id: string;
+      channels_enqueued: string[];
+    }>("/notify", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   }
 
   async getNotifications(userId: string, page = 1, limit = 20) {
-    return this.request<{ success: boolean; data: any[]; unread_count: number }>(
-      `/notifications/${userId}?page=${page}&limit=${limit}`,
-      { method: "GET" },
-    );
+    return this.request<{
+      success: boolean;
+      data: any[];
+      unread_count: number;
+    }>(`/notifications/${userId}?page=${page}&limit=${limit}`, {
+      method: "GET",
+    });
   }
 
   async getUnreadCount(userId: string) {
@@ -459,7 +481,10 @@ BlueMQ exposes a WebSocket server at `/ws` on the same port as the HTTP API.
 #### Connection
 
 ```typescript
-const client = new BlueMqClient("https://your-bluemq.example.com", "bmq_your_key");
+const client = new BlueMqClient(
+  "https://your-bluemq.example.com",
+  "bmq_your_key",
+);
 const wsUrl = client.getWsUrl("user_123");
 const ws = new WebSocket(wsUrl);
 
@@ -489,7 +514,6 @@ ws.onmessage = (event) => {
 - Keep the WebSocket URL server-side (build via API proxy, not in browser code)
 - Only show toasts for in-app channel notifications (push/email/SMS are handled by their own channels)
 
-
 ## 15. Production Error-Handling Checklist
 
 Implement at caller side:
@@ -512,7 +536,7 @@ Implement at caller side:
 ## 17. Known Current Gaps and Safe Handling
 
 1. Legacy deployments may still contain old `inapp` template rows if normalization SQL has not been run.
-  Safe handling now: run startup schema migration/normalization in API mode before traffic.
+   Safe handling now: run startup schema migration/normalization in API mode before traffic.
 2. OneSignal push target validation is not enforced at notify route level.
    Safe handling now: validate push recipient fields in your own backend before calling notify.
 3. SERVICE_API_KEY_SECRET has a default fallback in config.

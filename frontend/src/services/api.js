@@ -90,6 +90,10 @@ class ApiClient {
     return this.#request("GET", "/templates", { params: { type, channel } });
   }
 
+  getTemplate(id) {
+    return this.#request("GET", `/templates/${id}`);
+  }
+
   createTemplate(data) {
     return this.#request("POST", "/templates", { body: data });
   }
