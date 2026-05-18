@@ -13,14 +13,14 @@ Client App -> POST /notify -> API Layer -> BullMQ Queues -> Workers -> Providers
 
 ## Channels
 
-| Channel  | Provider Options                          | Concurrency | Retries |
-| -------- | ----------------------------------------- | ----------- | ------- |
-| Push     | OneSignal or Firebase                     | 10          | 3       |
-| Email    | Resend, OneSignal, or MSG91              | 5           | 3       |
-| SMS      | OneSignal, Twilio, or MSG91              | 5           | 5       |
-| WhatsApp | MSG91 or Meta Cloud API                  | 5           | 5       |
-| Call     | MSG91                                    | 5           | 5       |
-| In-App   | DB (direct)                              | 20          | 2       |
+| Channel  | Provider Options            | Concurrency | Retries |
+| -------- | --------------------------- | ----------- | ------- |
+| Push     | OneSignal or Firebase       | 10          | 3       |
+| Email    | Resend, OneSignal, or MSG91 | 5           | 3       |
+| SMS      | OneSignal, Twilio, or MSG91 | 5           | 5       |
+| WhatsApp | MSG91 or Meta Cloud API     | 5           | 5       |
+| Call     | MSG91                       | 5           | 5       |
+| In-App   | DB (direct)                 | 20          | 2       |
 
 ## Quick Start
 
@@ -133,13 +133,18 @@ Body: { "app_id": "tutrsy", "name": "Tutrsy App" }
 POST /templates
 Headers: x-api-key: <your-api-key>
 Body: {
-  "type": "fee_due",
-  "channel": "push",
-  "title": "Fee Reminder",
-  "body": "Hi {{student_name}}, your fee of {{amount}} is due",
-  "cta_text": "View Fee Details"
+  "type": "join_request_status_updated",
+  "channel": "email",
+  "condition_key": "request_status",
+  "condition_value": "APPROVED",
+  "title": "Your join request is approved",
+  "body": "Hi {{requester_name}}, your request #{{join_request_id}} is approved.",
+  "cta_text": "View Details",
+  "cta_url": "https://app.example.com/requests/{{join_request_id}}"
 }
 ```
+
+`condition_key` + `condition_value` are optional. If omitted, template becomes the default variant for that `type + channel`.
 
 ### Send Notification
 

@@ -36,20 +36,83 @@ CREATE TABLE IF NOT EXISTS templates (
   channel     VARCHAR(32)  NOT NULL,          -- push / email / sms / whatsapp / in_app (canonical)
   title       VARCHAR(512),
   body        TEXT NOT NULL,
+  body_format VARCHAR(16)  NOT NULL DEFAULT 'text', -- text / html (email)
   cta_text    VARCHAR(255),
+  cta_url     TEXT,
+  condition_key   VARCHAR(128),               -- optional, e.g. "request_status"
+  condition_value VARCHAR(255),               -- optional, e.g. "APPROVED"
+  variant_key     VARCHAR(255) NOT NULL DEFAULT 'default',
   is_active   BOOLEAN NOT NULL DEFAULT true,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  UNIQUE (app_id, type, channel)
+  UNIQUE (app_id, type, channel, variant_key)
 );
+
+ALTER TABLE templates
+  ADD COLUMN IF NOT EXISTS body_format VARCHAR(16) NOT NULL DEFAULT 'text';
+
+ALTER TABLE templates
+  ADD COLUMN IF NOT EXISTS cta_url TEXT;
+
+ALTER TABLE templates
+  ADD COLUMN IF NOT EXISTS condition_key VARCHAR(128);
+
+ALTER TABLE templates
+  ADD COLUMN IF NOT EXISTS condition_value VARCHAR(255);
+
+ALTER TABLE templates
+  ADD COLUMN IF NOT EXISTS variant_key VARCHAR(255) NOT NULL DEFAULT 'default';
+
+UPDATE templates
+SET
+  body_format = 'text'
+WHERE body_format IS NULL OR btrim(body_format) = '';
+
+UPDATE templates
+SET variant_key = 'default'
+WHERE variant_key IS NULL OR btrim(variant_key) = '';
+
+ALTER TABLE templates
+  ALTER COLUMN body_format SET NOT NULL;
+
+ALTER TABLE templates
+  ALTER COLUMN variant_key SET NOT NULL;
+
+ALTER TABLE templates
+  DROP CONSTRAINT IF EXISTS templates_app_id_type_channel_key;
+
+ALTER TABLE templates
+  DROP CONSTRAINT IF EXISTS templates_app_id_type_channel_variant_key;
+
+ALTER TABLE templates
+  ADD CONSTRAINT templates_app_id_type_channel_variant_key
+  UNIQUE (app_id, type, channel, variant_key);
+
+ALTER TABLE templates
+  DROP CONSTRAINT IF EXISTS chk_templates_condition_pair;
+
+ALTER TABLE templates
+  ADD CONSTRAINT chk_templates_condition_pair
+  CHECK (
+    (condition_key IS NULL AND condition_value IS NULL)
+    OR
+    (condition_key IS NOT NULL AND condition_value IS NOT NULL)
+  );
+
+CREATE INDEX IF NOT EXISTS idx_templates_lookup
+  ON templates (app_id, type, channel, is_active, updated_at DESC);
 
 -- Normalize legacy inapp alias to canonical in_app, preserving the latest row.
 UPDATE templates AS canonical
 SET
   title = legacy.title,
   body = legacy.body,
+  body_format = legacy.body_format,
   cta_text = legacy.cta_text,
+  cta_url = legacy.cta_url,
+  condition_key = legacy.condition_key,
+  condition_value = legacy.condition_value,
   is_active = legacy.is_active,
   updated_at = legacy.updated_at
 FROM templates AS legacy
@@ -57,6 +120,7 @@ WHERE canonical.app_id = legacy.app_id
   AND canonical.type = legacy.type
   AND canonical.channel = 'in_app'
   AND legacy.channel = 'inapp'
+  AND canonical.variant_key = COALESCE(legacy.variant_key, 'default')
   AND legacy.updated_at > canonical.updated_at;
 
 DELETE FROM templates AS legacy
@@ -64,7 +128,8 @@ USING templates AS canonical
 WHERE legacy.app_id = canonical.app_id
   AND legacy.type = canonical.type
   AND legacy.channel = 'inapp'
-  AND canonical.channel = 'in_app';
+  AND canonical.channel = 'in_app'
+  AND canonical.variant_key = COALESCE(legacy.variant_key, 'default');
 
 UPDATE templates
 SET channel = 'in_app', updated_at = now()

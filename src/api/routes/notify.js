@@ -19,6 +19,53 @@ const { getAppProvider } = require("../../providers/per-app-factory");
 
 const router = Router();
 
+function normalizeComparable(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized || null;
+}
+
+function templateMatchesCondition(template, variables) {
+  const conditionKey = normalizeComparable(template.condition_key);
+  const conditionValue = normalizeComparable(template.condition_value);
+
+  if (!conditionKey && !conditionValue) {
+    return { matches: true, score: 0 };
+  }
+
+  const variableEntry = Object.entries(variables || {}).find(
+    ([key]) => normalizeComparable(key) === conditionKey,
+  );
+  const variableValue = normalizeComparable(variableEntry?.[1]);
+  if (!variableValue) {
+    return { matches: false, score: -1 };
+  }
+
+  return variableValue === conditionValue
+    ? { matches: true, score: 2 }
+    : { matches: false, score: -1 };
+}
+
+function pickBestTemplate(templates, variables) {
+  let best = null;
+  let bestScore = -1;
+
+  for (const template of templates) {
+    const { matches, score } = templateMatchesCondition(template, variables);
+    if (!matches) continue;
+
+    if (score > bestScore) {
+      best = template;
+      bestScore = score;
+      if (bestScore === 2) {
+        break;
+      }
+    }
+  }
+
+  return best;
+}
+
 /**
  * POST /notify
  *
@@ -167,42 +214,56 @@ router.post("/", async (req, res) => {
     );
 
     const templates = await sql`
-      SELECT channel, title, body, body_format, cta_text
+      SELECT
+        channel,
+        title,
+        body,
+        body_format,
+        cta_text,
+        cta_url,
+        condition_key,
+        condition_value,
+        variant_key
       FROM templates
       WHERE app_id = ${appId}
         AND type = ${type}
         AND channel = ANY(${templateCandidates})
         AND is_active = true
-      ORDER BY updated_at DESC
+      ORDER BY channel ASC, updated_at DESC
     `;
 
     console.log(
-      `[notify] Found ${templates.length} template(s)${templates.length > 0 ? `: [${templates.map((t) => `${t.channel}: "${t.title}"`).join(", ")}]` : ""}`,
+      `[notify] Found ${templates.length} template(s)${templates.length > 0 ? `: [${templates.map((t) => `${t.channel}/${t.variant_key || "default"}: "${t.title}"`).join(", ")}]` : ""}`,
     );
 
-    // Build a map: channel → rendered template
-    const templateMap = {};
+    const templateRowsByChannel = {};
     for (const tpl of templates) {
       const normalizedTemplateChannel = normalizePublicChannel(tpl.channel);
-      if (
-        !normalizedTemplateChannel ||
-        templateMap[normalizedTemplateChannel]
-      ) {
+      if (!normalizedTemplateChannel) {
         continue;
       }
-
-      templateMap[normalizedTemplateChannel] = {
-        title: renderTemplate(tpl.title, variables),
-        body: renderTemplate(tpl.body, variables),
-        bodyFormat: tpl.body_format || "text",
-        ctaText: renderTemplate(tpl.cta_text, variables),
-      };
+      if (!templateRowsByChannel[normalizedTemplateChannel]) {
+        templateRowsByChannel[normalizedTemplateChannel] = [];
+      }
+      templateRowsByChannel[normalizedTemplateChannel].push(tpl);
     }
 
-    // For channels without a template, build a fallback from variables or type
+    // Build a map: channel → best rendered template (condition-aware)
+    const templateMap = {};
     const resolvedChannels = [];
     for (const ch of effectiveChannels) {
-      if (!templateMap[ch]) {
+      const channelTemplates = templateRowsByChannel[ch] || [];
+      const selectedTemplate = pickBestTemplate(channelTemplates, variables);
+
+      if (selectedTemplate) {
+        templateMap[ch] = {
+          title: renderTemplate(selectedTemplate.title, variables),
+          body: renderTemplate(selectedTemplate.body, variables),
+          bodyFormat: selectedTemplate.body_format || "text",
+          ctaText: renderTemplate(selectedTemplate.cta_text, variables),
+          actionUrl: renderTemplate(selectedTemplate.cta_url, variables),
+        };
+      } else {
         console.warn(
           `[notify] ⚠ No template found for channel "${ch}" — using fallback`,
         );
@@ -213,6 +274,7 @@ router.post("/", async (req, res) => {
             variables?.body || variables?.message || `Notification: ${type}`,
           bodyFormat: "text",
           ctaText: variables?.cta_text || null,
+          actionUrl: variables?.cta_url || null,
         };
       }
       resolvedChannels.push(ch);
@@ -221,6 +283,7 @@ router.post("/", async (req, res) => {
     // ─── 3. Save notification to DB ───
     // Use the first available template for the master record
     const primaryTemplate = templateMap[effectiveChannels[0]];
+    const primaryActionUrl = primaryTemplate?.actionUrl || action_url || null;
     const notificationId = uuidv4();
 
     await sql`
@@ -229,7 +292,7 @@ router.post("/", async (req, res) => {
       VALUES
         (${notificationId}, ${appId}, ${user_id}, ${type},
          ${primaryTemplate.title}, ${primaryTemplate.body},
-         ${JSON.stringify(data || {})}, ${action_url || null}, 'pending')
+         ${JSON.stringify(data || {})}, ${primaryActionUrl}, 'pending')
     `;
 
     // ─── 4. Enqueue jobs per channel ───
@@ -239,7 +302,10 @@ router.post("/", async (req, res) => {
     for (const channel of resolvedChannels) {
       const internalChannel = toInternalChannel(channel);
       if (!internalChannel) continue;
-      templatesByChannel[internalChannel] = templateMap[channel];
+      templatesByChannel[internalChannel] = {
+        ...templateMap[channel],
+        actionUrl: templateMap[channel]?.actionUrl || action_url || null,
+      };
     }
 
     const enqueued = await enqueueNotification({

@@ -166,11 +166,19 @@ Minimum required fields:
 
 BlueMQ attempts to load active templates by `app_id + type + channel`.
 
+If multiple variants exist for the same type/channel, BlueMQ chooses:
+
+1. Conditional match (`condition_key` + `condition_value`) against `variables`.
+2. Default variant (no condition) as fallback.
+
+There are no built-in rule profiles or reserved condition keys. The integrating app defines the key/value pairs it wants to evaluate.
+
 If a template for a channel is missing, BlueMQ falls back to generated content:
 
 - `title`: `variables.title` or `type` (underscores replaced with spaces)
 - `body`: `variables.body` or `variables.message` or `Notification: <type>`
 - `cta_text`: `variables.cta_text` or `null`
+- `cta_url`: `variables.cta_url` or request `action_url`
 
 ### 9.2 WhatsApp channel edge behavior
 
@@ -231,6 +239,9 @@ Example:
 Rendering behavior:
 
 - Unknown placeholders remain unchanged in output.
+- Optional conditional variants are supported via `condition_key` + `condition_value` on templates.
+- Those condition fields are user-defined, so any product can choose its own rule names and matching values.
+- CTA links can be authored directly in template `cta_url`; if omitted, notify `action_url` is used.
 
 ## 12. Notification Read APIs (Bell/Inbox)
 
@@ -285,10 +296,10 @@ Authentication is validated on connection. Invalid keys receive a `4001` close c
 
 All messages are JSON with `{ event, data }` shape:
 
-| Event | When | Data |
-|-------|------|------|
-| `new_notification` | In-app notification delivered | Full notification row |
-| `notification_deleted` | Notification soft-deleted | `{ id, was_read }` |
+| Event                  | When                          | Data                  |
+| ---------------------- | ----------------------------- | --------------------- |
+| `new_notification`     | In-app notification delivered | Full notification row |
+| `notification_deleted` | Notification soft-deleted     | `{ id, was_read }`    |
 
 ### Heartbeat
 

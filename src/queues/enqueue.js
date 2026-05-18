@@ -12,7 +12,7 @@ const { getQueue } = require("./index");
  * @param {string} opts.appId
  * @param {string} opts.externalUserId
  * @param {string} opts.type            — template type e.g. "fee_due"
- * @param {object} opts.templatesByChannel — channel -> { title, body, bodyFormat, ctaText }
+ * @param {object} opts.templatesByChannel — channel -> { title, body, bodyFormat, ctaText, actionUrl }
  * @param {object} opts.user            — { email, phone, onesignal_player_id, ... }
  * @param {string} [opts.actionUrl]
  * @param {object} [opts.data]          — arbitrary extra data
@@ -39,6 +39,7 @@ async function enqueueNotification(opts) {
     body: "",
     bodyFormat: "text",
     ctaText: null,
+    actionUrl: null,
   };
 
   const enqueued = [];
@@ -47,6 +48,7 @@ async function enqueueNotification(opts) {
     const queue = getQueue(channel);
 
     const template = templatesByChannel?.[channel] || defaultTemplate;
+    const resolvedActionUrl = template.actionUrl || actionUrl || null;
     const jobPayload = {
       notificationId,
       appId,
@@ -57,7 +59,7 @@ async function enqueueNotification(opts) {
       bodyFormat: template.bodyFormat || "text",
       ctaText: template.ctaText,
       user,
-      actionUrl,
+      actionUrl: resolvedActionUrl,
       data,
       entityId,
       parentEntityId,
