@@ -447,6 +447,7 @@ export class BlueMqClient {
   /** Build a WebSocket URL for real-time notifications */
   getWsUrl(userId: string): string {
     const wsBase = this.baseUrl.replace(/^http/, "ws");
+    // If baseUrl includes /api, this produces /api/ws (supported by BlueMQ).
     return `${wsBase}/ws?api_key=${encodeURIComponent(this.apiKey)}&user_id=${encodeURIComponent(userId)}`;
   }
 }
@@ -455,6 +456,7 @@ export class BlueMqClient {
 ### 14.2 WebSocket Integration (Real-Time)
 
 BlueMQ exposes a WebSocket server at `/ws` on the same port as the HTTP API.
+For API-prefixed deployments, `/api/ws` is also supported.
 
 #### Connection
 

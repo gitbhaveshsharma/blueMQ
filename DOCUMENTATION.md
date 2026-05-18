@@ -257,7 +257,8 @@ A `notification_deleted` WebSocket event is broadcast to connected clients.
 
 ## 12.5 Real-Time WebSocket
 
-BlueMQ exposes a WebSocket server at `ws://<host>:<port>/ws` for real-time notification delivery.
+BlueMQ exposes a WebSocket server at `/ws` for real-time notification delivery.
+For compatibility with API-prefixed proxies/clients, `/api/ws` is also accepted.
 
 ### Connection
 
@@ -266,6 +267,14 @@ Clients connect with query parameters:
 ```
 ws://your-bluemq-host:3001/ws?api_key=<your-api-key>&user_id=<user-id>
 ```
+
+If your API base URL is prefixed (for example `/api`), this alias also works:
+
+```
+ws://your-bluemq-host:3001/api/ws?api_key=<your-api-key>&user_id=<user-id>
+```
+
+For HTTPS deployments, always use `wss://`.
 
 - `api_key`: tenant API key (same as `x-api-key` header)
 - `user_id`: the user whose notifications to subscribe to

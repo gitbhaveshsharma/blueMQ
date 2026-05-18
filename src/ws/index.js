@@ -2,7 +2,9 @@
  * WebSocket Server
  *
  * Provides real-time notification delivery to connected clients.
- * Clients connect with: ws://host:port/ws?api_key=<key>&user_id=<id>
+ * Clients connect with:
+ *   - ws://host:port/ws?api_key=<key>&user_id=<id>
+ *   - ws://host:port/api/ws?api_key=<key>&user_id=<id> (compat alias)
  *
  * Architecture:
  *   - Attached to the same HTTP server as Express (no extra port)
@@ -22,6 +24,14 @@ const { getDb } = require("../db");
 
 /** @type {Map<string, Set<import("ws").WebSocket>>} */
 const clients = new Map();
+const WS_PATHS = new Set(["/ws", "/api/ws"]);
+
+/** Normalize and validate acceptable websocket path. */
+function normalizeWsPath(pathname) {
+  if (!pathname) return null;
+  const normalized = pathname.replace(/\/+$/, "") || "/";
+  return WS_PATHS.has(normalized) ? normalized : null;
+}
 
 /** Build a room key from appId + userId */
 function roomKey(appId, userId) {
@@ -53,7 +63,26 @@ async function resolveAppId(apiKey) {
  * @param {import("http").Server} httpServer
  */
 function attachWebSocketServer(httpServer) {
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on("upgrade", (req, socket, head) => {
+    const host = req.headers.host || "localhost";
+
+    try {
+      const url = new URL(req.url, `http://${host}`);
+      if (!normalizeWsPath(url.pathname)) {
+        socket.destroy();
+        return;
+      }
+
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+    } catch (err) {
+      console.warn("[ws] Upgrade parse failed:", err.message);
+      socket.destroy();
+    }
+  });
 
   // ─── Heartbeat ───
   const HEARTBEAT_INTERVAL = 30_000;
@@ -73,7 +102,8 @@ function attachWebSocketServer(httpServer) {
 
   // ─── Connection handler ───
   wss.on("connection", async (ws, req) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    const host = req.headers.host || "localhost";
+    const url = new URL(req.url, `http://${host}`);
     const apiKey = url.searchParams.get("api_key");
     const userId = url.searchParams.get("user_id");
 
@@ -122,7 +152,7 @@ function attachWebSocketServer(httpServer) {
     });
   });
 
-  console.log("[ws] WebSocket server attached on /ws");
+  console.log("[ws] WebSocket server attached on /ws and /api/ws");
   return wss;
 }
 
@@ -138,9 +168,7 @@ function broadcast(appId, userId, event, data) {
   const key = roomKey(appId, userId);
   const room = clients.get(key);
   if (!room || room.size === 0) {
-    console.log(
-      `[ws] broadcast(${event}) — no clients in room ${key}`,
-    );
+    console.log(`[ws] broadcast(${event}) — no clients in room ${key}`);
     return;
   }
 
