@@ -85,6 +85,7 @@ All routes below require `x-api-key`:
 - `/notifications/*`
 - `/templates/*`
 - `/whatsapp/*`
+- `/schedules/*`
 - `/apps/me`
 
 `x-api-key` is mapped to a tenant in `apps`, and `req.appId` is used to scope all data.
@@ -352,6 +353,10 @@ Core tables:
 - `notification_logs`: per-channel attempt logs.
 - `whatsapp_sessions`: per-entity Meta configuration and parent fallback metadata.
 - `app_provider_credentials`: per-app routing and provider credentials (Firebase, OneSignal, Resend, Twilio, MSG91).
+- `app_settings`: global default configuration (poll interval, max retries, timezone).
+- `client_settings`: per-client schedule setting overrides.
+- `scheduled_notifications`: scheduled notification definitions (one-time and recurring).
+- `schedule_execution_logs`: execution history per schedule run.
 
 ## 15. Environment Configuration
 
@@ -471,3 +476,128 @@ Do not hardcode them per tenant inside business logic.
 - Inspect `GET /health` queue counters.
 - Scale worker processes for overloaded channels.
 - Review Redis connectivity and mode configuration.
+
+## 22. Scheduled Notifications
+
+BlueMQ supports scheduled notifications that fire at specific times or on recurring schedules.
+
+### 22.1 Schedule Types
+
+**One-time**: Fires once at a specific future datetime, then marks itself as completed.
+
+Example: Quiz starts at 3PM → notify enrolled students exactly at 3PM.
+
+**Recurring**: Fires repeatedly on a defined schedule, computing `next_run_at` after each execution.
+
+Example: Fee receipt on the 1st of every month at 9AM, attendance summary every Monday at 8AM.
+
+Supported frequencies for recurring:
+- `daily` — fires every day at `time_of_day`
+- `weekly` — fires every week on `day_of_week` at `time_of_day`
+- `monthly` — fires every month on `day_of_month` (capped at 28) at `time_of_day`
+- `custom_cron` — fires on a custom cron expression
+
+### 22.2 Data Source Pattern
+
+BlueMQ does NOT store dynamic notification content. At execution time, BlueMQ calls the client's `data_source_url` to get the fresh payload. Business logic stays in the client app.
+
+The client's `data_source_url` must respond with:
+
+```json
+{
+  "notifications": [
+    {
+      "user_id": "uuid",
+      "title": "string",
+      "body": "string",
+      "channels": ["push", "email", "in_app", "whatsapp"],
+      "metadata": {}
+    }
+  ]
+}
+```
+
+BlueMQ signs every outbound request with HMAC-SHA256 using the per-schedule `data_source_secret`. Headers sent:
+
+- `x-bluemq-signature: sha256=<hmac>`
+- `x-bluemq-schedule-id: <schedule_id>`
+- `x-bluemq-client-id: <client_id>`
+- `Content-Type: application/json`
+
+Request body:
+```json
+{
+  "schedule_id": "uuid",
+  "client_id": "string",
+  "template_key": "string",
+  "triggered_at": "ISO-8601"
+}
+```
+
+All outbound calls have an 8-second timeout.
+
+### 22.3 Configuration Hierarchy
+
+For `max_retries` and `timezone`, BlueMQ uses a 3-tier priority:
+
+1. **Per-schedule** — values provided in the API request body
+2. **Per-client** — saved in `client_settings` table via dashboard
+3. **Global defaults** — stored in `app_settings` table
+
+All config lives in the database — no env vars needed. Config can be changed at runtime without redeployment.
+
+### 22.4 Schedule API Reference
+
+All routes require `x-api-key`. `client_id` is always derived server-side from the API key.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST /schedules` | Create a schedule | |
+| `GET /schedules` | List schedules | `?status=` `?type=` filters |
+| `GET /schedules/:id` | Get one schedule | |
+| `PATCH /schedules/:id` | Update a schedule | Recomputes `next_run_at` if timing changed |
+| `DELETE /schedules/:id` | Delete a schedule | |
+| `POST /schedules/:id/trigger` | Manual trigger | Does not affect `next_run_at` or retry state |
+| `GET /schedules/:id/logs` | Execution logs | Paginated |
+
+**Create request body:**
+```json
+{
+  "type": "recurring",
+  "template_key": "fee_reminder",
+  "data_source_url": "https://your-app.com/api/bluemq/fee-data",
+  "data_source_secret": "your-hmac-secret",
+  "audience": { "group": "all_students" },
+  "frequency": "monthly",
+  "day_of_month": 1,
+  "time_of_day": "09:00",
+  "timezone": "Asia/Kolkata"
+}
+```
+
+Note: `data_source_secret` is write-only — it is never returned in API responses.
+
+### 22.5 Client Settings API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET /settings/schedule` | Get schedule settings | Returns client settings + resolved defaults |
+| `PATCH /settings/schedule` | Update schedule settings | `max_retries` (1-10), `default_timezone` |
+
+### 22.6 Polling Worker
+
+The scheduled notification worker is a BullMQ repeatable job that:
+
+1. Polls every N minutes (configurable via `schedule_poll_interval_cron` in `app_settings`)
+2. Finds all active schedules where `next_run_at <= now()`
+3. Uses `FOR UPDATE SKIP LOCKED` in a transaction to prevent duplicate processing
+4. For each due schedule: calls `data_source_url`, enqueues notifications, updates state
+5. On failure: increments `retry_count`; marks as `failed` when retries exhausted
+6. On success: resets `retry_count`, computes next `next_run_at` for recurring schedules
+
+The poll interval is refreshed from the database every 10 minutes without requiring a restart.
+
+### 22.7 Log Retention
+
+Execution logs in `schedule_execution_logs` are automatically purged after 90 days by a weekly cleanup job.
+

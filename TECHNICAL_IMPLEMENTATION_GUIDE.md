@@ -137,6 +137,7 @@ These require x-api-key:
 - /templates
 - /notifications
 - /whatsapp
+- /schedules
 - /apps/me
 
 ## 6. API Contract: Notify
@@ -562,3 +563,185 @@ Implement at caller side:
 - DOCUMENTATION.md (business and operator overview)
 - README.md (quick setup and local run)
 - DEPLOYMENT.md and DEPLOY_DROPLET.md (deployment playbooks)
+
+## 20. Scheduled Notifications Implementation
+
+### 20.1 Overview
+
+BlueMQ supports scheduled notifications where delivery is triggered at a future time. BlueMQ calls the client's `data_source_url` to get fresh notification data at execution time, keeping business logic in your app.
+
+### 20.2 Creating a Scheduled Notification
+
+```ts
+// One-time schedule (fires once)
+await blueMq.request('/schedules', {
+  method: 'POST',
+  body: JSON.stringify({
+    type: 'one_time',
+    template_key: 'quiz_reminder',
+    data_source_url: 'https://your-app.com/api/bluemq/quiz-data',
+    data_source_secret: 'your-hmac-secret',
+    audience: { quiz_id: 'quiz_abc', enrolled: true },
+    run_at: '2025-06-15T15:00:00+05:30',
+    timezone: 'Asia/Kolkata'
+  })
+});
+
+// Recurring schedule (fires monthly)
+await blueMq.request('/schedules', {
+  method: 'POST',
+  body: JSON.stringify({
+    type: 'recurring',
+    template_key: 'fee_reminder',
+    data_source_url: 'https://your-app.com/api/bluemq/fee-data',
+    data_source_secret: 'your-hmac-secret',
+    audience: { group: 'all_students' },
+    frequency: 'monthly',
+    day_of_month: 1,
+    time_of_day: '09:00',
+    timezone: 'Asia/Kolkata'
+  })
+});
+```
+
+### 20.3 Implementing the data_source_url Endpoint
+
+Your app must expose an endpoint that BlueMQ calls at execution time.
+
+#### Node.js / Express
+
+```js
+const crypto = require('crypto');
+
+function verifyBlueMQSignature(secret, body, signature) {
+  const expected = crypto.createHmac('sha256', secret).update(body).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+
+app.post('/api/bluemq/fee-data', (req, res) => {
+  const sig = req.headers['x-bluemq-signature']?.replace('sha256=', '');
+  if (!sig || !verifyBlueMQSignature(process.env.BLUEMQ_WEBHOOK_SECRET, JSON.stringify(req.body), sig)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  const { schedule_id, template_key } = req.body;
+  // Query your database for recipients
+  const students = getStudentsWithPendingFees();
+
+  res.json({
+    notifications: students.map(s => ({
+      user_id: s.id,
+      title: 'Fee Reminder',
+      body: `Hi ${s.name}, your fee of ₹${s.amount} is due.`,
+      channels: ['push', 'email', 'in_app'],
+      metadata: { fee_id: s.fee_id, amount: s.amount }
+    }))
+  });
+});
+```
+
+#### Laravel (PHP)
+
+```php
+Route::post('/api/bluemq/fee-data', function (Request $request) {
+    $signature = str_replace('sha256=', '', $request->header('x-bluemq-signature'));
+    $expected = hash_hmac('sha256', $request->getContent(), config('services.bluemq.webhook_secret'));
+
+    if (!hash_equals($expected, $signature)) {
+        return response()->json(['error' => 'Invalid signature'], 401);
+    }
+
+    $students = Student::whereHas('pendingFees')->get();
+
+    return response()->json([
+        'notifications' => $students->map(fn ($s) => [
+            'user_id' => $s->id,
+            'title' => 'Fee Reminder',
+            'body' => "Hi {$s->name}, your fee of ₹{$s->pending_amount} is due.",
+            'channels' => ['push', 'email', 'in_app'],
+            'metadata' => ['fee_id' => $s->fee_id],
+        ])
+    ]);
+});
+```
+
+#### Django (Python)
+
+```python
+import hmac, hashlib, json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def bluemq_fee_data(request):
+    signature = request.headers.get('x-bluemq-signature', '').replace('sha256=', '')
+    expected = hmac.new(
+        settings.BLUEMQ_WEBHOOK_SECRET.encode(),
+        request.body,
+        hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        return JsonResponse({'error': 'Invalid signature'}, status=401)
+
+    students = Student.objects.filter(has_pending_fees=True)
+    return JsonResponse({
+        'notifications': [
+            {
+                'user_id': str(s.id),
+                'title': 'Fee Reminder',
+                'body': f'Hi {s.name}, your fee of ₹{s.pending_amount} is due.',
+                'channels': ['push', 'email', 'in_app'],
+                'metadata': {'fee_id': str(s.fee_id)},
+            }
+            for s in students
+        ]
+    })
+```
+
+### 20.4 Response Contract
+
+Your `data_source_url` endpoint MUST return:
+
+```json
+{
+  "notifications": [
+    {
+      "user_id": "string (required)",
+      "title": "string",
+      "body": "string",
+      "channels": ["push", "email", "in_app"],
+      "metadata": {}
+    }
+  ]
+}
+```
+
+Returning an empty array `{ "notifications": [] }` is valid and treated as success.
+
+All requests have an 8-second timeout. If your endpoint does not respond within 8 seconds, BlueMQ treats it as a failure and increments the retry counter.
+
+### 20.5 Schedule Settings
+
+Configure defaults via the dashboard (Settings → Scheduled Notifications) or API:
+
+```bash
+# Get current settings
+curl -H 'x-api-key: YOUR_KEY' https://your-bluemq.com/settings/schedule
+
+# Update settings
+curl -X PATCH -H 'x-api-key: YOUR_KEY' -H 'content-type: application/json' \
+  -d '{"max_retries": 5, "default_timezone": "Asia/Kolkata"}' \
+  https://your-bluemq.com/settings/schedule
+```
+
+### 20.6 Go-Live Checklist for Schedules
+
+- [ ] `data_source_url` endpoint deployed and HMAC verification working
+- [ ] `data_source_secret` stored securely (never logged)
+- [ ] Endpoint responds within 8 seconds under load
+- [ ] Empty notifications array `[]` is handled gracefully
+- [ ] Schedule created via API or dashboard and status is `active`
+- [ ] Test with manual trigger (`POST /schedules/:id/trigger`) before relying on auto-poll
+- [ ] Execution logs reviewed via dashboard or `GET /schedules/:id/logs`
+

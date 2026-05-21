@@ -13,6 +13,7 @@ import NotificationLogsPage from "./pages/NotificationLogsPage";
 import WhatsAppPage from "./pages/WhatsAppPage";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
+import SchedulesPage from "./pages/SchedulesPage";
 
 export default function App() {
   return (
@@ -40,6 +41,7 @@ export default function App() {
             />
             <Route path="/whatsapp" element={<WhatsAppPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/schedules" element={<SchedulesPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
         </Route>

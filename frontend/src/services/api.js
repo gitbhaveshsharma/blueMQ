@@ -208,6 +208,46 @@ class ApiClient {
   updateCredentials(data) {
     return this.#request("PUT", "/settings/credentials", { body: data });
   }
+
+  // ── Schedule Settings ──
+  getScheduleSettings() {
+    return this.#request("GET", "/settings/schedule");
+  }
+
+  updateScheduleSettings(data) {
+    return this.#request("PATCH", "/settings/schedule", { body: data });
+  }
+
+  // ── Schedules ──
+  getSchedules({ status, type } = {}) {
+    return this.#request("GET", "/schedules", { params: { status, type } });
+  }
+
+  getSchedule(id) {
+    return this.#request("GET", `/schedules/${id}`);
+  }
+
+  createSchedule(data) {
+    return this.#request("POST", "/schedules", { body: data });
+  }
+
+  updateSchedule(id, data) {
+    return this.#request("PATCH", `/schedules/${id}`, { body: data });
+  }
+
+  deleteSchedule(id) {
+    return this.#request("DELETE", `/schedules/${id}`);
+  }
+
+  triggerSchedule(id) {
+    return this.#request("POST", `/schedules/${id}/trigger`);
+  }
+
+  getScheduleLogs(id, { page = 1, limit = 20 } = {}) {
+    return this.#request("GET", `/schedules/${id}/logs`, {
+      params: { page, limit },
+    });
+  }
 }
 
 export const api = new ApiClient();

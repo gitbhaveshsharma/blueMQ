@@ -11,6 +11,7 @@ import {
   Menu,
   User,
   Settings,
+  Clock,
 } from "lucide-react";
 import { createElement, useState } from "react";
 
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
     icon: BarChart3,
   },
   { to: "/whatsapp", label: "WhatsApp", icon: MessageSquare },
+  { to: "/schedules", label: "Schedules", icon: Clock },
   { to: "/settings", label: "Settings", icon: Settings },
   { to: "/profile", label: "Profile", icon: User },
 ];

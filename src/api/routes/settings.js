@@ -369,4 +369,140 @@ router.put("/credentials", authMiddleware, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────
+//  GET /settings/schedule
+//  Returns the client's schedule settings with
+//  resolved defaults from the config hierarchy.
+// ─────────────────────────────────────────────
+router.get("/schedule", authMiddleware, async (req, res) => {
+  try {
+    const sql = getDb();
+
+    // Fetch client-specific settings
+    const clientRows = await sql`
+      SELECT max_retries, default_timezone, updated_at
+      FROM client_settings
+      WHERE client_id = ${req.appId}
+      LIMIT 1
+    `;
+
+    // Fetch global defaults for display
+    const globalRows = await sql`
+      SELECT key, value FROM app_settings
+      WHERE key IN ('schedule_max_retries', 'schedule_default_timezone')
+    `;
+
+    const globals = {};
+    for (const row of globalRows) {
+      globals[row.key] = row.value;
+    }
+
+    const client = clientRows[0] || null;
+
+    return res.json({
+      success: true,
+      data: {
+        client_settings: client
+          ? {
+              max_retries: client.max_retries,
+              default_timezone: client.default_timezone,
+              updated_at: client.updated_at,
+            }
+          : null,
+        global_defaults: {
+          max_retries: parseInt(globals.schedule_max_retries || "3", 10),
+          default_timezone: globals.schedule_default_timezone || "UTC",
+        },
+        resolved: {
+          max_retries:
+            client?.max_retries ??
+            parseInt(globals.schedule_max_retries || "3", 10),
+          default_timezone:
+            client?.default_timezone ??
+            globals.schedule_default_timezone ??
+            "UTC",
+        },
+      },
+    });
+  } catch (err) {
+    console.error("[settings] get schedule settings error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  PATCH /settings/schedule
+//  Upsert client schedule settings.
+// ─────────────────────────────────────────────
+router.patch("/schedule", authMiddleware, async (req, res) => {
+  try {
+    const { max_retries, default_timezone } = req.body;
+
+    if (max_retries !== undefined) {
+      const parsed = parseInt(max_retries, 10);
+      if (isNaN(parsed) || parsed < 1 || parsed > 10) {
+        return res
+          .status(400)
+          .json({ error: "max_retries must be between 1 and 10" });
+      }
+    }
+
+    if (
+      default_timezone !== undefined &&
+      default_timezone !== null &&
+      typeof default_timezone !== "string"
+    ) {
+      return res.status(400).json({ error: "default_timezone must be a string" });
+    }
+
+    if (max_retries === undefined && default_timezone === undefined) {
+      return res.status(400).json({ error: "No fields provided to update" });
+    }
+
+    const sql = getDb();
+
+    // Build upsert dynamically — only set provided fields
+    const updates = {};
+    if (max_retries !== undefined) updates.max_retries = parseInt(max_retries, 10);
+    if (default_timezone !== undefined) updates.default_timezone = default_timezone;
+
+    const columns = Object.keys(updates);
+    const values = Object.values(updates);
+
+    const insertCols = ["client_id", ...columns, "updated_at"].join(", ");
+    const insertPlaceholders = [
+      "$1",
+      ...columns.map((_, i) => `$${i + 2}`),
+      "now()",
+    ].join(", ");
+
+    const updateSet = columns
+      .map((col, i) => `${col} = $${i + 2}`)
+      .concat("updated_at = now()")
+      .join(", ");
+
+    const query = `
+      INSERT INTO client_settings (${insertCols})
+      VALUES (${insertPlaceholders})
+      ON CONFLICT (client_id) DO UPDATE SET ${updateSet}
+      RETURNING max_retries, default_timezone, updated_at
+    `;
+
+    const result = await sql.query(query, [req.appId, ...values]);
+
+    console.log(
+      `[settings] Schedule settings updated for app ${req.appId}:`,
+      columns.join(", "),
+    );
+
+    return res.json({
+      success: true,
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error("[settings] update schedule settings error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 module.exports = router;

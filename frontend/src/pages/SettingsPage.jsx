@@ -16,7 +16,16 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
+  Clock,
 } from "lucide-react";
+
+const TIMEZONES = (() => {
+  try {
+    return Intl.supportedValuesOf("timeZone");
+  } catch {
+    return ["UTC", "America/New_York", "Europe/London", "Asia/Kolkata", "Asia/Tokyo"];
+  }
+})();
 
 // ─── Provider option definitions ───
 const PUSH_PROVIDERS = [
@@ -304,6 +313,14 @@ export default function SettingsPage() {
     msg91: false,
   });
 
+  // Schedule settings state
+  const [scheduleSettings, setScheduleSettings] = useState({
+    max_retries: "",
+    default_timezone: "",
+  });
+  const [scheduleDefaults, setScheduleDefaults] = useState(null);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+
   const toggleSection = (section) => {
     setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
@@ -357,7 +374,48 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetchCredentials();
+    fetchScheduleSettings();
   }, [fetchCredentials]);
+
+  const fetchScheduleSettings = useCallback(async () => {
+    try {
+      const data = await api.getScheduleSettings();
+      if (data.data) {
+        setScheduleSettings({
+          max_retries: data.data.client_settings?.max_retries ?? "",
+          default_timezone: data.data.client_settings?.default_timezone ?? "",
+        });
+        setScheduleDefaults(data.data.global_defaults || null);
+      }
+    } catch (err) {
+      console.error("Failed to load schedule settings:", err.message);
+    }
+  }, []);
+
+  async function handleSaveScheduleSettings() {
+    setSavingSchedule(true);
+    try {
+      const payload = {};
+      if (scheduleSettings.max_retries !== "") {
+        payload.max_retries = parseInt(scheduleSettings.max_retries, 10);
+      }
+      if (scheduleSettings.default_timezone) {
+        payload.default_timezone = scheduleSettings.default_timezone;
+      }
+      if (Object.keys(payload).length === 0) {
+        toast.error("No schedule settings to save");
+        setSavingSchedule(false);
+        return;
+      }
+      await api.updateScheduleSettings(payload);
+      toast.success("Schedule settings saved");
+      await fetchScheduleSettings();
+    } catch (err) {
+      toast.error("Failed to save: " + err.message);
+    } finally {
+      setSavingSchedule(false);
+    }
+  }
 
   function handleProviderChange(channel, value) {
     if (channel === "push") setProviderPush(value);
@@ -450,6 +508,97 @@ export default function SettingsPage() {
         >
           <RefreshCw size={16} />
         </button>
+      </div>
+
+      {/* ─── Scheduled Notification Settings ─── */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm space-y-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Clock size={18} className="text-indigo-500" />
+          <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+            Scheduled Notifications
+          </h3>
+        </div>
+        <p className="text-xs text-gray-400 -mt-3">
+          Configure default settings for scheduled notifications. Per-schedule
+          overrides take priority.
+        </p>
+
+        {scheduleDefaults && (
+          <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-400">
+            <strong className="text-gray-500">Global defaults:</strong>{" "}
+            Max retries = {scheduleDefaults.max_retries}, Timezone ={" "}
+            {scheduleDefaults.default_timezone}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="schedule_timezone"
+              className="text-xs font-medium text-gray-500"
+            >
+              Default Timezone
+            </label>
+            <select
+              id="schedule_timezone"
+              value={scheduleSettings.default_timezone}
+              onChange={(e) =>
+                setScheduleSettings((prev) => ({
+                  ...prev,
+                  default_timezone: e.target.value,
+                }))
+              }
+              className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
+            >
+              <option value="">Use global default</option>
+              {TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="schedule_max_retries"
+              className="text-xs font-medium text-gray-500"
+            >
+              Max Retries (1-10)
+            </label>
+            <input
+              id="schedule_max_retries"
+              type="number"
+              min={1}
+              max={10}
+              value={scheduleSettings.max_retries}
+              onChange={(e) =>
+                setScheduleSettings((prev) => ({
+                  ...prev,
+                  max_retries: e.target.value,
+                }))
+              }
+              placeholder="Use global default"
+              className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleSaveScheduleSettings}
+            disabled={savingSchedule}
+            className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          >
+            {savingSchedule ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : (
+              <Save size={14} />
+            )}
+            {savingSchedule ? "Saving..." : "Save Schedule Settings"}
+          </button>
+        </div>
       </div>
 
       {/* Status banner */}
