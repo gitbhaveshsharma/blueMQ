@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../services/api";
 import toast from "react-hot-toast";
 import {
@@ -7,6 +8,7 @@ import {
   Plus,
   Play,
   Pause,
+  Pencil,
   Trash2,
   FileText,
   X,
@@ -32,14 +34,6 @@ const DAYS_OF_WEEK = [
   "Friday",
   "Saturday",
 ];
-
-const TIMEZONES = (() => {
-  try {
-    return Intl.supportedValuesOf("timeZone");
-  } catch {
-    return ["UTC", "America/New_York", "Europe/London", "Asia/Kolkata", "Asia/Tokyo"];
-  }
-})();
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -108,25 +102,6 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-// ─── Empty Form State ───────────────────────────────────────
-
-const EMPTY_FORM = {
-  type: "one_time",
-  template_key: "",
-  data_source_url: "",
-  data_source_secret: "",
-  audience: "{}",
-  created_by: "",
-  max_retries: "",
-  timezone: "",
-  run_at: "",
-  frequency: "daily",
-  time_of_day: "09:00",
-  day_of_week: 1,
-  day_of_month: 1,
-  cron_expression: "",
-};
-
 // ─── Sub-Components ─────────────────────────────────────────
 
 function StatusIcon({ status }) {
@@ -137,396 +112,6 @@ function StatusIcon({ status }) {
   if (status === "partial")
     return <AlertCircle size={14} className="text-amber-500" />;
   return null;
-}
-
-// ─── Create / Edit Modal ────────────────────────────────────
-
-function ScheduleModal({ isOpen, onClose, onSave, initial }) {
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
-  const isEdit = !!initial;
-
-  useEffect(() => {
-    if (initial) {
-      setForm({
-        type: initial.type || "one_time",
-        template_key: initial.template_key || "",
-        data_source_url: initial.data_source_url || "",
-        data_source_secret: "",
-        audience: initial.audience
-          ? JSON.stringify(initial.audience, null, 2)
-          : "{}",
-        created_by: initial.created_by || "",
-        max_retries: initial.max_retries ?? "",
-        timezone: initial.timezone || "",
-        run_at: initial.run_at
-          ? new Date(initial.run_at).toISOString().slice(0, 16)
-          : "",
-        frequency: initial.frequency || "daily",
-        time_of_day: initial.time_of_day
-          ? initial.time_of_day.substring(0, 5)
-          : "09:00",
-        day_of_week: initial.day_of_week ?? 1,
-        day_of_month: initial.day_of_month ?? 1,
-        cron_expression: initial.cron_expression || "",
-      });
-    } else {
-      setForm(EMPTY_FORM);
-    }
-  }, [initial]);
-
-  if (!isOpen) return null;
-
-  function set(field, value) {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      let audienceParsed;
-      try {
-        audienceParsed = JSON.parse(form.audience);
-      } catch {
-        toast.error("Audience must be valid JSON");
-        setSaving(false);
-        return;
-      }
-
-      const payload = {
-        type: form.type,
-        template_key: form.template_key,
-        data_source_url: form.data_source_url,
-        audience: audienceParsed,
-      };
-
-      // Only send secret if provided (edit mode: blank = keep existing)
-      if (form.data_source_secret) {
-        payload.data_source_secret = form.data_source_secret;
-      } else if (!isEdit) {
-        payload.data_source_secret = form.data_source_secret;
-      }
-
-      if (form.created_by) payload.created_by = form.created_by;
-      if (form.max_retries !== "") payload.max_retries = parseInt(form.max_retries, 10);
-      if (form.timezone) payload.timezone = form.timezone;
-
-      if (form.type === "one_time") {
-        payload.run_at = new Date(form.run_at).toISOString();
-      } else {
-        payload.frequency = form.frequency;
-        if (form.frequency !== "custom_cron") {
-          payload.time_of_day = form.time_of_day;
-        }
-        if (form.frequency === "weekly") {
-          payload.day_of_week = parseInt(form.day_of_week, 10);
-        }
-        if (form.frequency === "monthly") {
-          payload.day_of_month = parseInt(form.day_of_month, 10);
-        }
-        if (form.frequency === "custom_cron") {
-          payload.cron_expression = form.cron_expression;
-        }
-      }
-
-      await onSave(payload, initial?.id);
-      onClose();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-16">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl animate-[fadeIn_0.2s_ease-in]">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
-          <h3 className="text-lg font-bold text-gray-900">
-            {isEdit ? "Edit Schedule" : "Create Schedule"}
-          </h3>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
-          {/* Type toggle */}
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 block">
-              Schedule Type
-            </label>
-            <div className="flex gap-2">
-              {["one_time", "recurring"].map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => set("type", t)}
-                  className={`rounded-xl border-2 px-4 py-2 text-sm font-medium transition-all ${
-                    form.type === t
-                      ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                      : "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
-                  }`}
-                >
-                  {t === "one_time" ? "One-Time" : "Recurring"}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Template Key */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-gray-500">
-              Template Key *
-            </label>
-            <input
-              type="text"
-              required
-              value={form.template_key}
-              onChange={(e) => set("template_key", e.target.value)}
-              placeholder="e.g. fee_reminder, attendance_summary"
-              className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-            />
-          </div>
-
-          {/* Data Source URL */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-gray-500">
-              Data Source URL *
-            </label>
-            <input
-              type="url"
-              required
-              value={form.data_source_url}
-              onChange={(e) => set("data_source_url", e.target.value)}
-              placeholder="https://your-app.com/api/bluemq/schedule-data"
-              className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-mono text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-            />
-          </div>
-
-          {/* Data Source Secret */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-gray-500">
-              Data Source Secret {isEdit ? "(leave blank to keep)" : "*"}
-            </label>
-            <input
-              type="password"
-              required={!isEdit}
-              value={form.data_source_secret}
-              onChange={(e) => set("data_source_secret", e.target.value)}
-              placeholder="HMAC signing secret"
-              className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-mono text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-            />
-          </div>
-
-          {/* Audience */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-gray-500">
-              Audience (JSON) *
-            </label>
-            <textarea
-              required
-              rows={3}
-              value={form.audience}
-              onChange={(e) => set("audience", e.target.value)}
-              placeholder='{"group": "all_students"}'
-              className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-mono text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-            />
-          </div>
-
-          {/* ─── Conditional: One-time fields ─── */}
-          {form.type === "one_time" && (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-500">
-                Run At (date & time) *
-              </label>
-              <input
-                type="datetime-local"
-                required
-                value={form.run_at}
-                onChange={(e) => set("run_at", e.target.value)}
-                className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-              />
-            </div>
-          )}
-
-          {/* ─── Conditional: Recurring fields ─── */}
-          {form.type === "recurring" && (
-            <div className="space-y-4 rounded-xl border border-gray-100 bg-gray-50/50 p-4">
-              <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Recurrence Settings
-              </label>
-
-              {/* Frequency */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-gray-500">
-                  Frequency *
-                </label>
-                <select
-                  value={form.frequency}
-                  onChange={(e) => set("frequency", e.target.value)}
-                  className="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                >
-                  {FREQUENCIES.map((f) => (
-                    <option key={f} value={f}>
-                      {f === "custom_cron"
-                        ? "Custom Cron"
-                        : f.charAt(0).toUpperCase() + f.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Time of Day (not for custom_cron) */}
-              {form.frequency !== "custom_cron" && (
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-medium text-gray-500">
-                    Time of Day *
-                  </label>
-                  <input
-                    type="time"
-                    value={form.time_of_day}
-                    onChange={(e) => set("time_of_day", e.target.value)}
-                    className="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                  />
-                </div>
-              )}
-
-              {/* Day of Week (weekly only) */}
-              {form.frequency === "weekly" && (
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-medium text-gray-500">
-                    Day of Week *
-                  </label>
-                  <select
-                    value={form.day_of_week}
-                    onChange={(e) => set("day_of_week", e.target.value)}
-                    className="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                  >
-                    {DAYS_OF_WEEK.map((d, i) => (
-                      <option key={i} value={i}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Day of Month (monthly only) */}
-              {form.frequency === "monthly" && (
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-medium text-gray-500">
-                    Day of Month (1-28) *
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={28}
-                    value={form.day_of_month}
-                    onChange={(e) => set("day_of_month", e.target.value)}
-                    className="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                  />
-                </div>
-              )}
-
-              {/* Cron Expression (custom_cron only) */}
-              {form.frequency === "custom_cron" && (
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-medium text-gray-500">
-                    Cron Expression *
-                  </label>
-                  <input
-                    type="text"
-                    value={form.cron_expression}
-                    onChange={(e) => set("cron_expression", e.target.value)}
-                    placeholder="*/5 * * * *"
-                    className="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm font-mono text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Timezone */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-gray-500">
-              Timezone
-            </label>
-            <select
-              value={form.timezone}
-              onChange={(e) => set("timezone", e.target.value)}
-              className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-            >
-              <option value="">Use default</option>
-              {TIMEZONES.map((tz) => (
-                <option key={tz} value={tz}>
-                  {tz}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Optional fields row */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-500">
-                Created By
-              </label>
-              <input
-                type="text"
-                value={form.created_by}
-                onChange={(e) => set("created_by", e.target.value)}
-                placeholder="admin@example.com"
-                className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-500">
-                Max Retries
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={form.max_retries}
-                onChange={(e) => set("max_retries", e.target.value)}
-                placeholder="Use default"
-                className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-300 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-              />
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-xl border border-gray-200 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-all"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-            >
-              {saving ? (
-                <RefreshCw size={14} className="animate-spin" />
-              ) : (
-                <Plus size={14} />
-              )}
-              {saving ? "Saving..." : isEdit ? "Update" : "Create"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
 }
 
 // ─── Logs Modal ─────────────────────────────────────────────
@@ -553,12 +138,16 @@ function LogsModal({ isOpen, onClose, schedule }) {
 
   useEffect(() => {
     if (isOpen && schedule) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPage(1);
     }
   }, [isOpen, schedule]);
 
   useEffect(() => {
-    if (isOpen) fetchLogs();
+    if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchLogs();
+    }
   }, [isOpen, fetchLogs]);
 
   if (!isOpen) return null;
@@ -689,14 +278,11 @@ function LogsModal({ isOpen, onClose, schedule }) {
 // ─── Main Page ──────────────────────────────────────────────
 
 export default function SchedulesPage() {
+  const navigate = useNavigate();
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-
-  // Modals
-  const [showCreate, setShowCreate] = useState(false);
-  const [editSchedule, setEditSchedule] = useState(null);
   const [logsSchedule, setLogsSchedule] = useState(null);
 
   const fetchSchedules = useCallback(async () => {
@@ -715,19 +301,9 @@ export default function SchedulesPage() {
   }, [statusFilter, typeFilter]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchSchedules();
   }, [fetchSchedules]);
-
-  async function handleSave(payload, id) {
-    if (id) {
-      await api.updateSchedule(id, payload);
-      toast.success("Schedule updated");
-    } else {
-      await api.createSchedule(payload);
-      toast.success("Schedule created");
-    }
-    fetchSchedules();
-  }
 
   async function handleToggleStatus(schedule) {
     const newStatus = schedule.status === "active" ? "paused" : "active";
@@ -768,7 +344,7 @@ export default function SchedulesPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
             <Clock size={22} className="text-indigo-500" />
@@ -778,7 +354,7 @@ export default function SchedulesPage() {
             Manage one-time and recurring notification schedules
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={fetchSchedules}
             className="rounded-lg border border-gray-200 p-2 text-gray-400 hover:bg-gray-50 transition-colors"
@@ -788,8 +364,7 @@ export default function SchedulesPage() {
           </button>
           <button
             onClick={() => {
-              setEditSchedule(null);
-              setShowCreate(true);
+              navigate("/schedules/new");
             }}
             className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-all"
           >
@@ -852,8 +427,7 @@ export default function SchedulesPage() {
           </p>
           <button
             onClick={() => {
-              setEditSchedule(null);
-              setShowCreate(true);
+              navigate("/schedules/new");
             }}
             className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-all"
           >
@@ -935,13 +509,10 @@ export default function SchedulesPage() {
                     <td className="px-4 py-3.5">
                       <div className="flex items-center justify-end gap-1">
                         {/* Pause / Resume */}
-                        {(s.status === "active" ||
-                          s.status === "paused") && (
+                        {(s.status === "active" || s.status === "paused") && (
                           <button
                             onClick={() => handleToggleStatus(s)}
-                            title={
-                              s.status === "active" ? "Pause" : "Resume"
-                            }
+                            title={s.status === "active" ? "Pause" : "Resume"}
                             className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
                           >
                             {s.status === "active" ? (
@@ -959,6 +530,17 @@ export default function SchedulesPage() {
                           className="rounded-lg p-1.5 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
                         >
                           <Zap size={14} />
+                        </button>
+
+                        {/* Edit */}
+                        <button
+                          onClick={() => {
+                            navigate(`/schedules/${s.id}/edit`);
+                          }}
+                          title="Edit"
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+                        >
+                          <Pencil size={14} />
                         </button>
 
                         {/* View Logs */}
@@ -987,17 +569,6 @@ export default function SchedulesPage() {
           </div>
         </div>
       )}
-
-      {/* Create/Edit Modal */}
-      <ScheduleModal
-        isOpen={showCreate}
-        onClose={() => {
-          setShowCreate(false);
-          setEditSchedule(null);
-        }}
-        onSave={handleSave}
-        initial={editSchedule}
-      />
 
       {/* Logs Modal */}
       <LogsModal

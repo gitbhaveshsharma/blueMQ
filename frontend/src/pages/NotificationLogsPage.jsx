@@ -80,9 +80,10 @@ export default function NotificationLogsPage() {
     }
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchLogs(1, query);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function onApplyFilters() {

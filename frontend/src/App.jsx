@@ -14,6 +14,7 @@ import WhatsAppPage from "./pages/WhatsAppPage";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 import SchedulesPage from "./pages/SchedulesPage";
+import ScheduleEditorPage from "./pages/ScheduleEditorPage";
 
 export default function App() {
   return (
@@ -42,6 +43,11 @@ export default function App() {
             <Route path="/whatsapp" element={<WhatsAppPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/schedules" element={<SchedulesPage />} />
+            <Route path="/schedules/new" element={<ScheduleEditorPage />} />
+            <Route
+              path="/schedules/:scheduleId/edit"
+              element={<ScheduleEditorPage />}
+            />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
         </Route>

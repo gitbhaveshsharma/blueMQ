@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { createElement, useEffect, useState } from "react";
 import { api } from "../services/api";
 import toast from "react-hot-toast";
 import {
@@ -23,7 +23,13 @@ const TIMEZONES = (() => {
   try {
     return Intl.supportedValuesOf("timeZone");
   } catch {
-    return ["UTC", "America/New_York", "Europe/London", "Asia/Kolkata", "Asia/Tokyo"];
+    return [
+      "UTC",
+      "America/New_York",
+      "Europe/London",
+      "Asia/Kolkata",
+      "Asia/Tokyo",
+    ];
   }
 })();
 
@@ -220,7 +226,7 @@ function TextInput({ label, name, value, onChange, placeholder }) {
 
 function CredentialSection({
   title,
-  icon: Icon,
+  icon,
   color,
   isOpen,
   onToggle,
@@ -237,7 +243,7 @@ function CredentialSection({
         <div
           className={`flex h-9 w-9 items-center justify-center rounded-xl ${color}`}
         >
-          <Icon size={18} className="text-white" />
+          {createElement(icon, { size: 18, className: "text-white" })}
         </div>
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
@@ -325,7 +331,7 @@ export default function SettingsPage() {
     setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
-  const fetchCredentials = useCallback(async () => {
+  async function fetchCredentials() {
     setLoading(true);
     try {
       const data = await api.getCredentials();
@@ -370,14 +376,9 @@ export default function SettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }
 
-  useEffect(() => {
-    fetchCredentials();
-    fetchScheduleSettings();
-  }, [fetchCredentials]);
-
-  const fetchScheduleSettings = useCallback(async () => {
+  async function fetchScheduleSettings() {
     try {
       const data = await api.getScheduleSettings();
       if (data.data) {
@@ -390,6 +391,13 @@ export default function SettingsPage() {
     } catch (err) {
       console.error("Failed to load schedule settings:", err.message);
     }
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchCredentials();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchScheduleSettings();
   }, []);
 
   async function handleSaveScheduleSettings() {
@@ -496,7 +504,7 @@ export default function SettingsPage() {
             <Settings size={22} className="text-indigo-500" />
             Provider Settings
           </h2>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-gray-500 mt-1 leading-relaxed">
             Configure your notification provider credentials and routing
             preferences
           </p>
@@ -518,15 +526,15 @@ export default function SettingsPage() {
             Scheduled Notifications
           </h3>
         </div>
-        <p className="text-xs text-gray-400 -mt-3">
+        <p className="text-xs text-gray-400 mt-1 leading-relaxed">
           Configure default settings for scheduled notifications. Per-schedule
           overrides take priority.
         </p>
 
         {scheduleDefaults && (
-          <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-400">
-            <strong className="text-gray-500">Global defaults:</strong>{" "}
-            Max retries = {scheduleDefaults.max_retries}, Timezone ={" "}
+          <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-400 leading-relaxed">
+            <strong className="text-gray-500">Global defaults:</strong> Max
+            retries = {scheduleDefaults.max_retries}, Timezone ={" "}
             {scheduleDefaults.default_timezone}
           </div>
         )}
@@ -632,7 +640,7 @@ export default function SettingsPage() {
             Provider Routing
           </h3>
         </div>
-        <p className="text-xs text-gray-400 -mt-3">
+        <p className="text-xs text-gray-400 mt-1 leading-relaxed">
           Choose which provider to use for each notification channel. Leave
           unset to use server defaults.
         </p>
@@ -681,7 +689,7 @@ export default function SettingsPage() {
           !!creds.firebase_project_id || existingCreds.has_firebase_private_key
         }
       >
-        <p className="text-xs text-gray-400 mb-2">
+        <p className="text-xs text-gray-400 mb-2 leading-relaxed">
           Get these from your{" "}
           <a
             href="https://console.firebase.google.com/"
@@ -728,7 +736,7 @@ export default function SettingsPage() {
           !!creds.onesignal_app_id || existingCreds.has_onesignal_api_key
         }
       >
-        <p className="text-xs text-gray-400 mb-2">
+        <p className="text-xs text-gray-400 mb-2 leading-relaxed">
           Get these from your{" "}
           <a
             href="https://app.onesignal.com/"
@@ -767,7 +775,7 @@ export default function SettingsPage() {
           !!creds.resend_from_email || existingCreds.has_resend_api_key
         }
       >
-        <p className="text-xs text-gray-400 mb-2">
+        <p className="text-xs text-gray-400 mb-2 leading-relaxed">
           Get your API key from{" "}
           <a
             href="https://resend.com/api-keys"
@@ -808,7 +816,7 @@ export default function SettingsPage() {
           existingCreds.has_twilio_auth_token
         }
       >
-        <p className="text-xs text-gray-400 mb-2">
+        <p className="text-xs text-gray-400 mb-2 leading-relaxed">
           Use Twilio credentials when SMS provider is set to Twilio.
         </p>
         <TextInput
@@ -848,7 +856,7 @@ export default function SettingsPage() {
           existingCreds.has_msg91_auth_key
         }
       >
-        <p className="text-xs text-gray-400 mb-2">
+        <p className="text-xs text-gray-400 mb-2 leading-relaxed">
           MSG91 flow IDs are required for SMS and Email. WhatsApp requires your
           integrated number.
         </p>
@@ -909,7 +917,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Info note */}
-      <div className="rounded-xl border border-gray-100 bg-gray-50 px-5 py-4 text-xs text-gray-400 space-y-1">
+      <div className="rounded-xl border border-gray-100 bg-gray-50 px-5 py-4 text-xs text-gray-400 space-y-1 leading-relaxed">
         <p>
           <strong className="text-gray-500">How it works:</strong> When you
           configure provider credentials here, BlueMQ will use your keys to send

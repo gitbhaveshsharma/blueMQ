@@ -51,14 +51,20 @@ function ActionsMenu({ onEdit, onDelete }) {
       {open && (
         <div className="absolute right-0 z-50 mt-1 w-36 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
           <button
-            onClick={() => { onEdit(); setOpen(false); }}
+            onClick={() => {
+              onEdit();
+              setOpen(false);
+            }}
             className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
           >
             <Pencil size={13} className="text-gray-400" />
             Edit
           </button>
           <button
-            onClick={() => { onDelete(); setOpen(false); }}
+            onClick={() => {
+              onDelete();
+              setOpen(false);
+            }}
             className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
           >
             <Trash2 size={13} className="text-red-400" />
@@ -104,7 +110,10 @@ function TemplateCard({ template, onEdit, onDelete }) {
           </p>
         </div>
         <div className="shrink-0">
-          <ActionsMenu onEdit={() => onEdit(template.id)} onDelete={() => onDelete(template.id)} />
+          <ActionsMenu
+            onEdit={() => onEdit(template.id)}
+            onDelete={() => onDelete(template.id)}
+          />
         </div>
       </div>
     </article>
@@ -135,7 +144,9 @@ export default function TemplatesPage() {
   }, [filterChannel, filterType]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPage(1);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchTemplates();
   }, [fetchTemplates]);
 
@@ -159,7 +170,8 @@ export default function TemplatesPage() {
     return templates.slice(startIndex, startIndex + ITEMS_PER_PAGE);
   }, [currentPage, templates]);
 
-  const startItem = totalItems === 0 ? 0 : (currentPage - 1) * ITEMS_PER_PAGE + 1;
+  const startItem =
+    totalItems === 0 ? 0 : (currentPage - 1) * ITEMS_PER_PAGE + 1;
   const endItem = Math.min(currentPage * ITEMS_PER_PAGE, totalItems);
 
   function goToPage(nextPage) {
@@ -280,43 +292,67 @@ export default function TemplatesPage() {
                 </colgroup>
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="px-4 py-3 text-left font-medium text-gray-600">Type</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600">Rule</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600">Channel</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600">Title</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600">Status</th>
-                    <th className="px-4 py-3 text-right font-medium text-gray-600">Actions</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      Type
+                    </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      Rule
+                    </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      Channel
+                    </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      Title
+                    </th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">
+                      Status
+                    </th>
+                    <th className="px-4 py-3 text-right font-medium text-gray-600">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {paginatedTemplates.map((template) => {
-                    const channelConfig = getTemplateChannelConfig(template.channel);
+                    const channelConfig = getTemplateChannelConfig(
+                      template.channel,
+                    );
                     return (
                       <tr
                         key={template.id}
                         className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50"
                       >
                         <td className="px-4 py-3">
-                          <span className="block truncate font-mono text-xs text-gray-700" title={template.type}>
+                          <span
+                            className="block truncate font-mono text-xs text-gray-700"
+                            title={template.type}
+                          >
                             {template.type}
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="block truncate text-xs text-gray-600" title={getRuleLabel(template)}>
+                          <span
+                            className="block truncate text-xs text-gray-600"
+                            title={getRuleLabel(template)}
+                          >
                             {getRuleLabel(template)}
                           </span>
                         </td>
                         <td className="px-4 py-3">
                           <span
                             className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                              channelConfig.badgeClass || "bg-gray-50 text-gray-700"
+                              channelConfig.badgeClass ||
+                              "bg-gray-50 text-gray-700"
                             }`}
                           >
                             {channelConfig.label || template.channel}
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="block truncate text-gray-700" title={template.title}>
+                          <span
+                            className="block truncate text-gray-700"
+                            title={template.title}
+                          >
                             {template.title || "—"}
                           </span>
                         </td>
@@ -328,7 +364,9 @@ export default function TemplatesPage() {
                                 : "bg-gray-100 text-gray-500"
                             }`}
                           >
-                            {template.is_active !== false ? "Active" : "Inactive"}
+                            {template.is_active !== false
+                              ? "Active"
+                              : "Inactive"}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right">
