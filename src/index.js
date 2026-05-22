@@ -90,9 +90,9 @@ function startApiServer() {
 }
 
 async function bootstrapByMode(runtime) {
-  if (runtime.runMigrations) {
-    await migrate();
-  }
+  // if (runtime.runMigrations) {
+  //   await migrate();
+  // }
 
   bootstrapProviders();
 

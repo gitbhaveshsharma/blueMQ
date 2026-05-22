@@ -2,6 +2,8 @@ const IORedis = require("ioredis");
 const config = require("../config");
 
 let connection;
+let publisher;
+let subscriber;
 
 function withCommonOptions(base) {
   return {
@@ -91,16 +93,41 @@ function attachConnectionListeners(client) {
   });
 }
 
+function createClient() {
+  const client = createConnection();
+  attachConnectionListeners(client);
+  return client;
+}
+
 /**
  * Returns a shared IORedis connection for BullMQ queues and workers.
  * BullMQ requires an ioredis instance (not the URL string).
  */
 function getRedisConnection() {
   if (!connection) {
-    connection = createConnection();
-    attachConnectionListeners(connection);
+    connection = createClient();
   }
   return connection;
+}
+
+/**
+ * Publisher connection for Redis pub/sub.
+ */
+function getRedisPublisher() {
+  if (!publisher) {
+    publisher = createClient();
+  }
+  return publisher;
+}
+
+/**
+ * Subscriber connection for Redis pub/sub.
+ */
+function getRedisSubscriber() {
+  if (!subscriber) {
+    subscriber = createClient();
+  }
+  return subscriber;
 }
 
 /**
@@ -111,6 +138,19 @@ async function closeRedis() {
     await connection.quit();
     connection = null;
   }
+  if (publisher) {
+    await publisher.quit();
+    publisher = null;
+  }
+  if (subscriber) {
+    await subscriber.quit();
+    subscriber = null;
+  }
 }
 
-module.exports = { getRedisConnection, closeRedis };
+module.exports = {
+  getRedisConnection,
+  getRedisPublisher,
+  getRedisSubscriber,
+  closeRedis,
+};

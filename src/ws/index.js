@@ -21,10 +21,18 @@
 
 const { WebSocketServer } = require("ws");
 const { getDb } = require("../db");
+const {
+  getRedisPublisher,
+  getRedisSubscriber,
+} = require("../queues/connection");
 
 /** @type {Map<string, Set<import("ws").WebSocket>>} */
 const clients = new Map();
 const WS_PATHS = new Set(["/ws", "/api/ws"]);
+const WS_BROADCAST_CHANNEL = "bluemq:ws:broadcast";
+const WS_INSTANCE_ID = `${process.pid}-${Math.random().toString(36).slice(2)}`;
+let wsServerAttached = false;
+let redisSubscriberStarted = false;
 
 /** Normalize and validate acceptable websocket path. */
 function normalizeWsPath(pathname) {
@@ -36,6 +44,58 @@ function normalizeWsPath(pathname) {
 /** Build a room key from appId + userId */
 function roomKey(appId, userId) {
   return `${appId}:${userId}`;
+}
+
+function publishWsEvent(payload) {
+  try {
+    const publisher = getRedisPublisher();
+    const message = JSON.stringify(payload);
+    publisher.publish(WS_BROADCAST_CHANNEL, message).catch((err) => {
+      console.warn("[ws] Redis publish failed:", err.message);
+    });
+  } catch (err) {
+    console.warn("[ws] Redis publish failed:", err.message);
+  }
+}
+
+function startRedisSubscriber() {
+  if (redisSubscriberStarted) return;
+  redisSubscriberStarted = true;
+
+  try {
+    const subscriber = getRedisSubscriber();
+    subscriber.subscribe(WS_BROADCAST_CHANNEL).catch((err) => {
+      console.warn("[ws] Redis subscribe failed:", err.message);
+    });
+
+    subscriber.on("message", (channel, message) => {
+      if (channel !== WS_BROADCAST_CHANNEL) return;
+
+      let payload;
+      try {
+        payload = JSON.parse(message);
+      } catch (err) {
+        console.warn("[ws] Invalid broadcast payload:", err.message);
+        return;
+      }
+
+      if (!payload || payload.origin === WS_INSTANCE_ID) return;
+
+      if (!payload.appId || !payload.userId || !payload.event) {
+        console.warn("[ws] Broadcast payload missing fields");
+        return;
+      }
+
+      broadcastLocal(
+        payload.appId,
+        payload.userId,
+        payload.event,
+        payload.data,
+      );
+    });
+  } catch (err) {
+    console.warn("[ws] Redis subscriber init failed:", err.message);
+  }
 }
 
 /**
@@ -64,6 +124,8 @@ async function resolveAppId(apiKey) {
  */
 function attachWebSocketServer(httpServer) {
   const wss = new WebSocketServer({ noServer: true });
+  wsServerAttached = true;
+  startRedisSubscriber();
 
   httpServer.on("upgrade", (req, socket, head) => {
     const host = req.headers.host || "localhost";
@@ -165,6 +227,22 @@ function attachWebSocketServer(httpServer) {
  * @param {object} data    — payload to send
  */
 function broadcast(appId, userId, event, data) {
+  const payload = {
+    appId,
+    userId,
+    event,
+    data,
+    origin: WS_INSTANCE_ID,
+  };
+
+  if (wsServerAttached) {
+    broadcastLocal(appId, userId, event, data);
+  }
+
+  publishWsEvent(payload);
+}
+
+function broadcastLocal(appId, userId, event, data) {
   const key = roomKey(appId, userId);
   const room = clients.get(key);
   if (!room || room.size === 0) {
