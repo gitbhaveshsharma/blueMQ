@@ -3,12 +3,150 @@ const { getRedisConnection } = require("../queues/connection");
 const { getDb } = require("../db");
 const { getPollIntervalCron } = require("../utils/config-resolver.util");
 const { computeNextRun } = require("../utils/compute-next-run.util");
+const { renderTemplate } = require("../utils/template");
+const {
+  normalizePublicChannel,
+  normalizePublicChannels,
+  getTemplateChannelCandidates,
+  toInternalChannel,
+  toInternalChannels,
+} = require("../utils/channel");
+const { normalizeEntityId } = require("../utils/whatsapp-session");
 const { signRequest } = require("../utils/hmac.util");
 const { enqueueNotification } = require("../queues/enqueue");
 
 const QUEUE_NAME = "scheduled-notification-poller";
 const STABLE_JOB_ID = "scheduled-notification-poll";
 const CONFIG_REFRESH_MS = 10 * 60 * 1000; // 10 minutes
+
+function normalizeComparable(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized || null;
+}
+
+function templateMatchesCondition(template, variables) {
+  const conditionKey = normalizeComparable(template.condition_key);
+  const conditionValue = normalizeComparable(template.condition_value);
+
+  if (!conditionKey && !conditionValue) {
+    return { matches: true, score: 0 };
+  }
+
+  const variableEntry = Object.entries(variables || {}).find(
+    ([key]) => normalizeComparable(key) === conditionKey,
+  );
+  const variableValue = normalizeComparable(variableEntry?.[1]);
+  if (!variableValue) {
+    return { matches: false, score: -1 };
+  }
+
+  return variableValue === conditionValue
+    ? { matches: true, score: 2 }
+    : { matches: false, score: -1 };
+}
+
+function pickBestTemplate(templates, variables) {
+  let best = null;
+  let bestScore = -1;
+
+  for (const template of templates) {
+    const { matches, score } = templateMatchesCondition(template, variables);
+    if (!matches) continue;
+
+    if (score > bestScore) {
+      best = template;
+      bestScore = score;
+      if (bestScore === 2) {
+        break;
+      }
+    }
+  }
+
+  return best;
+}
+
+function resolveTemplateVariables(item) {
+  if (item?.variables && typeof item.variables === "object") {
+    return item.variables;
+  }
+  if (item?.metadata && typeof item.metadata === "object") {
+    return item.metadata;
+  }
+  if (item?.data && typeof item.data === "object") {
+    return item.data;
+  }
+  return {};
+}
+
+function resolvePayloadData(item) {
+  if (item?.data && typeof item.data === "object") {
+    return item.data;
+  }
+  if (item?.metadata && typeof item.metadata === "object") {
+    return item.metadata;
+  }
+  if (item?.variables && typeof item.variables === "object") {
+    return item.variables;
+  }
+  return {};
+}
+
+async function loadTemplatesForSchedule(schedule, notifications, client) {
+  const requestedChannels = new Set();
+  for (const item of notifications) {
+    const normalized = normalizePublicChannels(item?.channels);
+    for (const channel of normalized) {
+      requestedChannels.add(channel);
+    }
+  }
+
+  const templateCandidates = [
+    ...new Set(
+      [...requestedChannels].flatMap((channel) =>
+        getTemplateChannelCandidates(channel),
+      ),
+    ),
+  ];
+
+  if (templateCandidates.length === 0) {
+    return {};
+  }
+
+  const { rows: templates } = await client.query(
+    `SELECT
+       channel,
+       title,
+       body,
+       body_format,
+       cta_text,
+       cta_url,
+       condition_key,
+       condition_value,
+       variant_key
+     FROM templates
+     WHERE app_id = $1
+       AND type = $2
+       AND channel = ANY($3)
+       AND is_active = true
+     ORDER BY channel ASC, updated_at DESC`,
+    [schedule.client_id, schedule.template_key, templateCandidates],
+  );
+
+  const templateRowsByChannel = {};
+  for (const tpl of templates) {
+    const normalizedTemplateChannel = normalizePublicChannel(tpl.channel);
+    if (!normalizedTemplateChannel) {
+      continue;
+    }
+    if (!templateRowsByChannel[normalizedTemplateChannel]) {
+      templateRowsByChannel[normalizedTemplateChannel] = [];
+    }
+    templateRowsByChannel[normalizedTemplateChannel].push(tpl);
+  }
+
+  return templateRowsByChannel;
+}
 
 /**
  * Register (or re-register) the repeatable poll job in Redis.
@@ -52,12 +190,14 @@ async function registerPoller(queue, intervalCron) {
  * @returns {object} parsed JSON response
  */
 async function callDataSource(schedule) {
-  const requestBody = JSON.stringify({
+  const requestPayload = {
     schedule_id: schedule.id,
     client_id: schedule.client_id,
     template_key: schedule.template_key,
     triggered_at: new Date().toISOString(),
-  });
+    audience: schedule.audience || null,
+  };
+  const requestBody = JSON.stringify(requestPayload);
 
   const signature = signRequest(schedule.data_source_secret, requestBody);
 
@@ -65,6 +205,10 @@ async function callDataSource(schedule) {
   const timeout = setTimeout(() => controller.abort(), 8000);
 
   try {
+    console.log(
+      `[schedule-worker] Calling data_source_url for ${schedule.id}: ${requestBody}`,
+    );
+
     const res = await fetch(schedule.data_source_url, {
       method: "POST",
       signal: controller.signal,
@@ -85,6 +229,10 @@ async function callDataSource(schedule) {
     }
 
     const data = await res.json();
+
+    console.log(
+      `[schedule-worker] data_source_url response for ${schedule.id}: ${JSON.stringify(data)}`,
+    );
 
     if (!data || !Array.isArray(data.notifications)) {
       throw new Error(
@@ -158,6 +306,11 @@ async function processSchedule(schedule, client) {
 
   // ─── FIX 5: Empty notifications array = success ───
   const notifications = sourceData.notifications;
+  const templateRowsByChannel = await loadTemplatesForSchedule(
+    schedule,
+    notifications,
+    client,
+  );
   let successCount = 0;
   let failCount = 0;
 
@@ -172,19 +325,87 @@ async function processSchedule(schedule, client) {
         continue;
       }
 
+      const normalizedChannels = normalizePublicChannels(item.channels);
+      if (normalizedChannels.length === 0) {
+        console.warn(
+          `[schedule-worker] Skipping invalid channels in schedule ${schedule.id}`,
+        );
+        failCount++;
+        continue;
+      }
+
+      const templateVariables = resolveTemplateVariables(item);
+      const payloadData = resolvePayloadData(item);
+      const metadata =
+        item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+      const userFields =
+        item.user && typeof item.user === "object" ? item.user : {};
+      const payloadUser = {
+        user_id: item.user_id,
+        ...metadata,
+        ...userFields,
+      };
+      const actionUrl = item.action_url || item.actionUrl || null;
+      const resolvedEntityId = normalizeEntityId(item.entity_id);
+      const resolvedParentEntityId = normalizeEntityId(item.parent_entity_id);
+
+      const templateMap = {};
+      for (const channel of normalizedChannels) {
+        const channelTemplates = templateRowsByChannel[channel] || [];
+        const selectedTemplate = pickBestTemplate(
+          channelTemplates,
+          templateVariables,
+        );
+
+        if (selectedTemplate) {
+          templateMap[channel] = {
+            title: renderTemplate(selectedTemplate.title, templateVariables),
+            body: renderTemplate(selectedTemplate.body, templateVariables),
+            bodyFormat: selectedTemplate.body_format || "text",
+            ctaText: renderTemplate(
+              selectedTemplate.cta_text,
+              templateVariables,
+            ),
+            actionUrl: renderTemplate(
+              selectedTemplate.cta_url,
+              templateVariables,
+            ),
+          };
+        } else {
+          templateMap[channel] = {
+            title:
+              item.title ||
+              templateVariables?.title ||
+              schedule.template_key.replace(/_/g, " "),
+            body:
+              item.body ||
+              templateVariables?.body ||
+              templateVariables?.message ||
+              `Notification: ${schedule.template_key}`,
+            bodyFormat: "text",
+            ctaText: templateVariables?.cta_text || null,
+            actionUrl: templateVariables?.cta_url || null,
+          };
+        }
+      }
+
+      const primaryTemplate = templateMap[normalizedChannels[0]];
+      const primaryActionUrl = primaryTemplate?.actionUrl || actionUrl || null;
+
       // Insert master notification row
       const insertResult = await client.query(
         `INSERT INTO notifications
-           (app_id, external_user_id, type, title, message, data, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+           (app_id, external_user_id, type, title, message, data, action_url, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
          RETURNING id`,
         [
           schedule.client_id,
           item.user_id,
           schedule.template_key,
-          item.title || null,
-          item.body || null,
-          JSON.stringify(item.metadata || {}),
+          primaryTemplate?.title || null,
+          primaryTemplate?.body || null,
+          JSON.stringify(payloadData),
+          primaryActionUrl,
         ],
       );
 
@@ -192,16 +413,14 @@ async function processSchedule(schedule, client) {
 
       // Build templatesByChannel
       const templatesByChannel = {};
-      const channels = [];
-      for (const ch of item.channels) {
-        const normalized = ch === "in_app" ? "inapp" : ch;
-        channels.push(normalized);
-        templatesByChannel[normalized] = {
-          title: item.title || schedule.template_key,
-          body: item.body || "",
-          bodyFormat: "text",
-          ctaText: null,
-          actionUrl: null,
+      for (const channel of normalizedChannels) {
+        const internalChannel = toInternalChannel(channel);
+        if (!internalChannel) {
+          continue;
+        }
+        templatesByChannel[internalChannel] = {
+          ...templateMap[channel],
+          actionUrl: templateMap[channel]?.actionUrl || actionUrl || null,
         };
       }
 
@@ -211,10 +430,12 @@ async function processSchedule(schedule, client) {
         externalUserId: item.user_id,
         type: schedule.template_key,
         templatesByChannel,
-        user: { user_id: item.user_id, ...(item.metadata || {}) },
-        actionUrl: null,
-        data: item.metadata || {},
-        channels,
+        user: payloadUser,
+        actionUrl: primaryActionUrl,
+        data: payloadData,
+        channels: toInternalChannels(normalizedChannels),
+        entityId: resolvedEntityId,
+        parentEntityId: resolvedParentEntityId,
       });
 
       successCount++;
@@ -244,7 +465,14 @@ async function processSchedule(schedule, client) {
        (schedule_id, client_id, triggered_by, status,
         total_recipients, success_count, fail_count)
      VALUES ($1, $2, 'scheduler', $3, $4, $5, $6)`,
-    [schedule.id, schedule.client_id, logStatus, total, successCount, failCount],
+    [
+      schedule.id,
+      schedule.client_id,
+      logStatus,
+      total,
+      successCount,
+      failCount,
+    ],
   );
 
   // Update the schedule row
@@ -344,7 +572,10 @@ async function pollTick() {
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    console.error("[schedule-worker] Poll tick transaction failed:", err.message);
+    console.error(
+      "[schedule-worker] Poll tick transaction failed:",
+      err.message,
+    );
   } finally {
     client.release();
   }

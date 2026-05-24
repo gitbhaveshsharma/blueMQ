@@ -511,11 +511,25 @@ The client's `data_source_url` must respond with:
       "title": "string",
       "body": "string",
       "channels": ["push", "email", "in_app", "whatsapp"],
-      "metadata": {}
+      "user": {
+        "email": "string",
+        "phone": "string",
+        "fcm_token": "string"
+      },
+      "variables": {},
+      "metadata": {},
+      "data": {},
+      "action_url": "string",
+      "entity_id": "string",
+      "parent_entity_id": "string"
     }
   ]
 }
 ```
+
+Include the `user` fields required by the channels you request (for example `user.phone` for sms/whatsapp, `user.email` for email, and `user.fcm_token` for Firebase push). These fields are passed through to workers.
+
+If templates exist for `template_key + channel`, BlueMQ renders them using `variables` and uses the rendered content for delivery. When no template exists, BlueMQ falls back to `title`/`body` (or variables-based defaults).
 
 BlueMQ signs every outbound request with HMAC-SHA256 using the per-schedule `data_source_secret`. Headers sent:
 
@@ -530,7 +544,8 @@ Request body:
   "schedule_id": "uuid",
   "client_id": "string",
   "template_key": "string",
-  "triggered_at": "ISO-8601"
+  "triggered_at": "ISO-8601",
+  "audience": {}
 }
 ```
 

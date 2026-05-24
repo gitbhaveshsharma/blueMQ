@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import {
   Search,
@@ -23,6 +23,35 @@ const DEFAULT_FILTERS = {
   from: "",
   to: "",
 };
+
+function toSearchTokens(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+}
+
+function matchesTokens(haystack, tokens) {
+  if (tokens.length === 0) return true;
+  const normalized = String(haystack || "").toLowerCase();
+  return tokens.every((token) => normalized.includes(token));
+}
+
+function buildLogSearchText(row) {
+  return [
+    row.notification_id,
+    row.external_user_id,
+    row.type,
+    row.title,
+    row.message,
+    row.channel,
+    row.provider,
+    row.status,
+    row.error,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
 function normalizeStatusTone(status) {
   if (status === "sent") return "bg-emerald-50 text-emerald-700";
@@ -51,40 +80,54 @@ export default function NotificationLogsPage() {
     [data],
   );
 
-  async function fetchLogs(nextPage = page, activeQuery = query) {
-    setLoading(true);
-    try {
-      const res = await api.getAppNotificationLogs({
-        page: nextPage,
-        limit: 20,
-        ...activeQuery,
-      });
+  const fetchLogs = useCallback(
+    async (nextPage = page, activeQuery = query) => {
+      setLoading(true);
+      try {
+        const res = await api.getAppNotificationLogs({
+          page: nextPage,
+          limit: 20,
+          ...activeQuery,
+        });
 
-      setData(res.data || []);
-      setPagination(res.pagination || null);
-      setSummary(res.summary || null);
-      setChannelStats(res.channel_stats || []);
-      setTimeline(
-        (res.timeline || []).map((item) => ({
-          label: item.day,
-          total: item.total,
-          sent: item.sent,
-          failed: item.failed,
-        })),
-      );
-      setPage(nextPage);
-    } catch (err) {
-      toast.error(err.message || "Failed to load notification logs");
-    } finally {
-      setLoading(false);
-    }
-  }
+        setData(res.data || []);
+        setPagination(res.pagination || null);
+        setSummary(res.summary || null);
+        setChannelStats(res.channel_stats || []);
+        setTimeline(
+          (res.timeline || []).map((item) => ({
+            label: item.day,
+            total: item.total,
+            sent: item.sent,
+            failed: item.failed,
+          })),
+        );
+        setPage(nextPage);
+      } catch (err) {
+        toast.error(err.message || "Failed to load notification logs");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [page, query],
+  );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchLogs(1, query);
   }, []);
+
+  useEffect(() => {
+    if (filters.search === query.search) return;
+    const handle = setTimeout(() => {
+      const nextQuery = { ...query, search: filters.search };
+      setQuery(nextQuery);
+      fetchLogs(1, nextQuery);
+    }, 350);
+
+    return () => clearTimeout(handle);
+  }, [filters.search, query, fetchLogs]);
 
   function onApplyFilters() {
     setQuery(filters);
@@ -96,6 +139,17 @@ export default function NotificationLogsPage() {
     setQuery(DEFAULT_FILTERS);
     fetchLogs(1, DEFAULT_FILTERS);
   }
+
+  const searchTokens = useMemo(
+    () => toSearchTokens(filters.search),
+    [filters.search],
+  );
+  const visibleData = useMemo(() => {
+    if (searchTokens.length === 0) return data;
+    return data.filter((row) =>
+      matchesTokens(buildLogSearchText(row), searchTokens),
+    );
+  }, [data, searchTokens]);
 
   return (
     <div className="space-y-6">
@@ -278,6 +332,10 @@ export default function NotificationLogsPage() {
           <div className="py-14 text-center text-sm text-gray-500">
             No logs found for selected filters
           </div>
+        ) : visibleData.length === 0 ? (
+          <div className="py-14 text-center text-sm text-gray-500">
+            No logs match your search
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -294,7 +352,7 @@ export default function NotificationLogsPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.map((row) => (
+                {visibleData.map((row) => (
                   <tr
                     key={row.id}
                     className="border-t border-gray-100 align-top"

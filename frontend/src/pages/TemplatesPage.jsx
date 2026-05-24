@@ -26,6 +26,32 @@ function getRuleLabel(template) {
   return "Default";
 }
 
+function toSearchTokens(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+}
+
+function matchesTokens(haystack, tokens) {
+  if (tokens.length === 0) return true;
+  const normalized = String(haystack || "").toLowerCase();
+  return tokens.every((token) => normalized.includes(token));
+}
+
+function buildTemplateSearchText(template) {
+  const channelConfig = getTemplateChannelConfig(template.channel);
+  return [
+    template.type,
+    template.title,
+    getRuleLabel(template),
+    template.channel,
+    channelConfig.label,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 // Three-dot popover menu
 function ActionsMenu({ onEdit, onDelete }) {
   const [open, setOpen] = useState(false);
@@ -132,7 +158,6 @@ export default function TemplatesPage() {
     setLoading(true);
     try {
       const response = await api.getTemplates({
-        type: filterType || undefined,
         channel: filterChannel || undefined,
       });
       setTemplates(response.data || []);
@@ -141,7 +166,7 @@ export default function TemplatesPage() {
     } finally {
       setLoading(false);
     }
-  }, [filterChannel, filterType]);
+  }, [filterChannel]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -161,14 +186,22 @@ export default function TemplatesPage() {
     }
   }
 
-  const totalItems = templates.length;
+  const searchTokens = useMemo(() => toSearchTokens(filterType), [filterType]);
+  const filteredTemplates = useMemo(() => {
+    if (searchTokens.length === 0) return templates;
+    return templates.filter((template) =>
+      matchesTokens(buildTemplateSearchText(template), searchTokens),
+    );
+  }, [templates, searchTokens]);
+
+  const totalItems = filteredTemplates.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
   const currentPage = Math.min(page, totalPages);
 
   const paginatedTemplates = useMemo(() => {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return templates.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [currentPage, templates]);
+    return filteredTemplates.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [currentPage, filteredTemplates]);
 
   const startItem =
     totalItems === 0 ? 0 : (currentPage - 1) * ITEMS_PER_PAGE + 1;
@@ -209,7 +242,7 @@ export default function TemplatesPage() {
               type="text"
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              placeholder="Filter by type..."
+              placeholder="Search by type, title, rule..."
               className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 lg:max-w-xs"
             />
             <select

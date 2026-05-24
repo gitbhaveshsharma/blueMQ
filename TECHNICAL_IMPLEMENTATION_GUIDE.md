@@ -634,7 +634,13 @@ app.post('/api/bluemq/fee-data', (req, res) => {
       title: 'Fee Reminder',
       body: `Hi ${s.name}, your fee of ₹${s.amount} is due.`,
       channels: ['push', 'email', 'in_app'],
-      metadata: { fee_id: s.fee_id, amount: s.amount }
+      user: {
+        email: s.email,
+        phone: s.phone,
+        fcm_token: s.fcm_token,
+      },
+      metadata: { fee_id: s.fee_id, amount: s.amount },
+      action_url: s.action_url,
     }))
   });
 });
@@ -659,7 +665,13 @@ Route::post('/api/bluemq/fee-data', function (Request $request) {
             'title' => 'Fee Reminder',
             'body' => "Hi {$s->name}, your fee of ₹{$s->pending_amount} is due.",
             'channels' => ['push', 'email', 'in_app'],
+        'user' => [
+          'email' => $s->email,
+          'phone' => $s->phone,
+          'fcm_token' => $s->fcm_token,
+        ],
             'metadata' => ['fee_id' => $s->fee_id],
+        'action_url' => $s->action_url,
         ])
     ]);
 });
@@ -692,7 +704,13 @@ def bluemq_fee_data(request):
                 'title': 'Fee Reminder',
                 'body': f'Hi {s.name}, your fee of ₹{s.pending_amount} is due.',
                 'channels': ['push', 'email', 'in_app'],
+          'user': {
+            'email': s.email,
+            'phone': s.phone,
+            'fcm_token': s.fcm_token,
+          },
                 'metadata': {'fee_id': str(s.fee_id)},
+          'action_url': s.action_url,
             }
             for s in students
         ]
@@ -711,11 +729,25 @@ Your `data_source_url` endpoint MUST return:
       "title": "string",
       "body": "string",
       "channels": ["push", "email", "in_app"],
-      "metadata": {}
+      "user": {
+        "email": "string",
+        "phone": "string",
+        "fcm_token": "string"
+      },
+      "variables": {},
+      "metadata": {},
+      "data": {},
+      "action_url": "string",
+      "entity_id": "string",
+      "parent_entity_id": "string"
     }
   ]
 }
 ```
+
+Include the `user` fields required by the channels you request (email/phone/tokens). These fields are passed through to the workers.
+
+If templates exist for `template_key + channel`, BlueMQ renders them using `variables` and uses the rendered content for delivery. When no template exists, BlueMQ falls back to `title`/`body` (or variables-based defaults).
 
 Returning an empty array `{ "notifications": [] }` is valid and treated as success.
 
