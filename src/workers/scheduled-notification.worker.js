@@ -162,7 +162,7 @@ async function registerPoller(queue, intervalCron) {
   for (const job of repeatables) {
     if (job.id === STABLE_JOB_ID) {
       await queue.removeRepeatableByKey(job.key);
-      console.log("[schedule-worker] Removed old repeatable job");
+      // console.log("[schedule-worker] Removed old repeatable job");
     }
   }
 
@@ -176,9 +176,9 @@ async function registerPoller(queue, intervalCron) {
     },
   );
 
-  console.log(
-    `[schedule-worker] Registered poll job with cron: ${intervalCron}`,
-  );
+  // console.log(
+  //   `[schedule-worker] Registered poll job with cron: ${intervalCron}`,
+  // );
 }
 
 /**
@@ -205,9 +205,9 @@ async function callDataSource(schedule) {
   const timeout = setTimeout(() => controller.abort(), 8000);
 
   try {
-    console.log(
-      `[schedule-worker] Calling data_source_url for ${schedule.id}: ${requestBody}`,
-    );
+    // console.log(
+    //   `[schedule-worker] Calling data_source_url for ${schedule.id}: ${requestBody}`,
+    // );
 
     const res = await fetch(schedule.data_source_url, {
       method: "POST",
@@ -230,9 +230,9 @@ async function callDataSource(schedule) {
 
     const data = await res.json();
 
-    console.log(
-      `[schedule-worker] data_source_url response for ${schedule.id}: ${JSON.stringify(data)}`,
-    );
+    // console.log(
+    //   `[schedule-worker] data_source_url response for ${schedule.id}: ${JSON.stringify(data)}`,
+    // );
 
     if (!data || !Array.isArray(data.notifications)) {
       throw new Error(
@@ -486,9 +486,9 @@ async function processSchedule(schedule, client) {
       [schedule.id, logStatus],
     );
 
-    console.log(
-      `[schedule-worker] One-time schedule ${schedule.id} completed (${successCount}/${total})`,
-    );
+    // console.log(
+    //   `[schedule-worker] One-time schedule ${schedule.id} completed (${successCount}/${total})`,
+    // );
   } else {
     // Recurring → compute next_run_at
     const nextRunAt = computeNextRun(schedule);
@@ -501,9 +501,9 @@ async function processSchedule(schedule, client) {
       [schedule.id, logStatus, nextRunAt.toISOString()],
     );
 
-    console.log(
-      `[schedule-worker] Recurring schedule ${schedule.id}: ${successCount}/${total} sent, next run at ${nextRunAt.toISOString()}`,
-    );
+    // console.log(
+    //   `[schedule-worker] Recurring schedule ${schedule.id}: ${successCount}/${total} sent, next run at ${nextRunAt.toISOString()}`,
+    // );
   }
 }
 
@@ -532,9 +532,9 @@ async function pollTick() {
       return;
     }
 
-    console.log(
-      `[schedule-worker] Found ${dueSchedules.length} due schedule(s)`,
-    );
+    // console.log(
+    //   `[schedule-worker] Found ${dueSchedules.length} due schedule(s)`,
+    // );
 
     for (const schedule of dueSchedules) {
       try {
@@ -628,9 +628,9 @@ async function startScheduledNotificationWorker() {
     try {
       const newCron = await getPollIntervalCron();
       if (newCron !== currentCron) {
-        console.log(
-          `[schedule-worker] Poll interval changed: ${currentCron} → ${newCron}`,
-        );
+        // console.log(
+        //   `[schedule-worker] Poll interval changed: ${currentCron} → ${newCron}`,
+        // );
         await registerPoller(queue, newCron);
         currentCron = newCron;
       }
@@ -647,9 +647,9 @@ async function startScheduledNotificationWorker() {
     clearInterval(refreshInterval);
   });
 
-  console.log(
-    `[workers] scheduled-notification worker started (poll: ${currentCron})`,
-  );
+  // console.log(
+  //   `[workers] scheduled-notification worker started (poll: ${currentCron})`,
+  // );
 
   return worker;
 }

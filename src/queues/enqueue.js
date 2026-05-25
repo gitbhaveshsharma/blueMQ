@@ -34,6 +34,14 @@ async function enqueueNotification(opts) {
     parentEntityId,
   } = opts;
 
+  const normalizedUser = user && typeof user === "object" ? { ...user } : {};
+  if (externalUserId && !normalizedUser.external_user_id) {
+    normalizedUser.external_user_id = externalUserId;
+  }
+  if (externalUserId && !normalizedUser.id) {
+    normalizedUser.id = externalUserId;
+  }
+
   const defaultTemplate = templatesByChannel?.[channels?.[0]] || {
     title: "",
     body: "",
@@ -58,7 +66,7 @@ async function enqueueNotification(opts) {
       body: template.body,
       bodyFormat: template.bodyFormat || "text",
       ctaText: template.ctaText,
-      user,
+      user: normalizedUser,
       actionUrl: resolvedActionUrl,
       data,
       entityId,
