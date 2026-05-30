@@ -207,7 +207,7 @@ function PreviewEmail({ title, body, bodyFormat, ctaText, actionUrl }) {
       {/* ── Email body viewport ── */}
       <div className="bg-[#f3f4f6] p-4 flex justify-center overflow-x-auto">
         <div
-          className={`transition-all duration-300 ${device.frameClass} bg-white rounded-lg shadow-md overflow-hidden`}
+          className={`transition-all duration-300 ${device.frameClass} overflow-hidden`}
         >
           {isHtml ? (
             hasBody ? (
@@ -269,7 +269,7 @@ export default function TemplatePreview({
   const PreviewRenderer = PREVIEW_RENDERERS[channelConfig.previewType] || PreviewCard;
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+    <div >
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm font-medium text-gray-700">Preview</span>
         <span className="text-xs text-gray-400">{channelConfig.label}</span>

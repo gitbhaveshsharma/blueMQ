@@ -77,15 +77,79 @@ function normalizeTemplateRow(row) {
 }
 
 /**
+ * Parses date-range query params: `from`, `to`, `days`.
+ * - `days`  → last N days from now (takes precedence over from/to)
+ * - `from`  → ISO date string for lower bound on created_at
+ * - `to`    → ISO date string for upper bound on created_at
+ *
+ * Returns { fromDate: Date|null, toDate: Date|null, error: string|null }
+ */
+function parseDateRange({ from, to, days }) {
+  if (days !== undefined) {
+    const n = parseInt(days, 10);
+    if (isNaN(n) || n < 1) {
+      return {
+        fromDate: null,
+        toDate: null,
+        error: "days must be a positive integer",
+      };
+    }
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - n);
+    fromDate.setHours(0, 0, 0, 0);
+    return { fromDate, toDate: new Date(), error: null };
+  }
+
+  let fromDate = null;
+  let toDate = null;
+
+  if (from) {
+    fromDate = new Date(from);
+    if (isNaN(fromDate.getTime())) {
+      return { fromDate: null, toDate: null, error: "Invalid `from` date" };
+    }
+  }
+
+  if (to) {
+    toDate = new Date(to);
+    if (isNaN(toDate.getTime())) {
+      return { fromDate: null, toDate: null, error: "Invalid `to` date" };
+    }
+    // Include the entire `to` day
+    toDate.setHours(23, 59, 59, 999);
+  }
+
+  if (fromDate && toDate && fromDate > toDate) {
+    return {
+      fromDate: null,
+      toDate: null,
+      error: "`from` must be before `to`",
+    };
+  }
+
+  return { fromDate, toDate, error: null };
+}
+
+/**
  * GET /templates
  *
  * List all templates for the authenticated app.
- * Optional query params: ?type=fee_due&channel=push
+ * Optional query params:
+ *   ?type=fee_due
+ *   &channel=push
+ *   &days=7          → last N days from now
+ *   &from=2024-01-01 → lower bound on created_at (ignored when days is set)
+ *   &to=2024-01-31   → upper bound on created_at (ignored when days is set)
+ *
+ * Date filtering uses ($param IS NULL OR created_at <op> $param) so the
+ * query is always fully static — no dynamic SQL fragments are injected.
+ * This is required because the custom sql wrapper does not support fragment
+ * composition (empty sql`` or chained fragments cause syntax errors).
  */
 router.get("/", async (req, res) => {
   try {
     const appId = req.appId;
-    const { type, channel } = req.query;
+    const { type, channel, from, to, days } = req.query;
     const normalizedChannel = channel ? normalizePublicChannel(channel) : null;
 
     if (channel && !isValidPublicChannel(channel)) {
@@ -94,46 +158,66 @@ router.get("/", async (req, res) => {
       });
     }
 
+    const {
+      fromDate,
+      toDate,
+      error: dateError,
+    } = parseDateRange({ from, to, days });
+    if (dateError) {
+      return res.status(400).json({ error: dateError });
+    }
+
+    // Always pass scalar values; NULL means "no bound" and the IS NULL check
+    // makes the condition a no-op so the query shape never changes.
+    const fromParam = fromDate ?? null;
+    const toParam = toDate ?? null;
+
     const sql = getDb();
 
     let rows;
     if (type && normalizedChannel) {
       const templateChannelCandidates =
         getTemplateChannelCandidates(normalizedChannel);
-
       rows = await sql`
         SELECT * FROM templates
         WHERE app_id = ${appId}
-          AND type = ${type}
+          AND type    = ${type}
           AND channel = ANY(${templateChannelCandidates})
-        ORDER BY updated_at DESC, variant_key ASC
+          AND (${fromParam}::timestamptz IS NULL OR created_at >= ${fromParam}::timestamptz)
+          AND (${toParam}::timestamptz   IS NULL OR created_at <= ${toParam}::timestamptz)
+        ORDER BY created_at DESC, variant_key ASC
       `;
     } else if (type) {
       rows = await sql`
         SELECT * FROM templates
-        WHERE app_id = ${appId} AND type = ${type}
-        ORDER BY updated_at DESC, variant_key ASC
+        WHERE app_id = ${appId}
+          AND type = ${type}
+          AND (${fromParam}::timestamptz IS NULL OR created_at >= ${fromParam}::timestamptz)
+          AND (${toParam}::timestamptz   IS NULL OR created_at <= ${toParam}::timestamptz)
+        ORDER BY created_at DESC, variant_key ASC
       `;
     } else if (normalizedChannel) {
       const templateChannelCandidates =
         getTemplateChannelCandidates(normalizedChannel);
-
       rows = await sql`
         SELECT * FROM templates
         WHERE app_id = ${appId}
           AND channel = ANY(${templateChannelCandidates})
-        ORDER BY updated_at DESC, variant_key ASC
+          AND (${fromParam}::timestamptz IS NULL OR created_at >= ${fromParam}::timestamptz)
+          AND (${toParam}::timestamptz   IS NULL OR created_at <= ${toParam}::timestamptz)
+        ORDER BY created_at DESC, variant_key ASC
       `;
     } else {
       rows = await sql`
         SELECT * FROM templates
         WHERE app_id = ${appId}
-        ORDER BY type, channel, variant_key
+          AND (${fromParam}::timestamptz IS NULL OR created_at >= ${fromParam}::timestamptz)
+          AND (${toParam}::timestamptz   IS NULL OR created_at <= ${toParam}::timestamptz)
+        ORDER BY created_at DESC, variant_key ASC
       `;
     }
 
     const normalizedRows = rows.map(normalizeTemplateRow);
-
     return res.json({ success: true, data: normalizedRows });
   } catch (err) {
     console.error("[templates] GET error:", err);

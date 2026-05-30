@@ -86,8 +86,18 @@ class ApiClient {
   }
 
   // ── Templates ──
-  getTemplates({ type, channel } = {}) {
-    return this.#request("GET", "/templates", { params: { type, channel } });
+  /**
+   * @param {object} opts
+   * @param {string} [opts.type]
+   * @param {string} [opts.channel]
+   * @param {number} [opts.days]   - last N days shorthand (sent as ?days=N)
+   * @param {string} [opts.from]   - ISO date string e.g. "2024-01-01"
+   * @param {string} [opts.to]     - ISO date string e.g. "2024-01-31"
+   */
+  getTemplates({ type, channel, days, from, to } = {}) {
+    return this.#request("GET", "/templates", {
+      params: { type, channel, days, from, to },
+    });
   }
 
   getTemplate(id) {
