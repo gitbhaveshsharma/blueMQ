@@ -392,15 +392,6 @@ router.post("/", async (req, res) => {
         ${normalizedCtaText},
         ${normalizedCtaUrl}
       )
-      ON CONFLICT (app_id, type, channel, variant_key) DO UPDATE SET
-        condition_key = EXCLUDED.condition_key,
-        condition_value = EXCLUDED.condition_value,
-        title = EXCLUDED.title,
-        body = EXCLUDED.body,
-        body_format = EXCLUDED.body_format,
-        cta_text = EXCLUDED.cta_text,
-        cta_url = EXCLUDED.cta_url,
-        updated_at = now()
       RETURNING *
     `;
 
