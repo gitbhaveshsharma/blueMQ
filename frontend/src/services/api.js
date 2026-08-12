@@ -258,6 +258,53 @@ class ApiClient {
       params: { page, limit },
     });
   }
+
+  // ── Audiences ──
+  getAudiences() {
+    return this.#request("GET", "/audiences");
+  }
+
+  getAudience(id) {
+    return this.#request("GET", `/audiences/${id}`);
+  }
+
+  createAudience(data) {
+    return this.#request("POST", "/audiences", { body: data });
+  }
+
+  updateAudience(id, data) {
+    return this.#request("PUT", `/audiences/${id}`, { body: data });
+  }
+
+  deleteAudience(id) {
+    return this.#request("DELETE", `/audiences/${id}`);
+  }
+
+  // ── WhatsApp Templates (Meta API proxy) ──
+  /**
+   * List approved Meta WhatsApp templates.
+   * @param {object} [opts]
+   * @param {string} [opts.entityId]  - which WhatsApp session to use
+   * @param {string} [opts.name]      - filter by template name
+   */
+  getWhatsAppTemplates({ entityId, name } = {}) {
+    return this.#request("GET", "/whatsapp-templates", {
+      params: { entity_id: entityId, name },
+    });
+  }
+
+  /**
+   * Get a single Meta WhatsApp template by name.
+   * @param {string} name
+   * @param {object} [opts]
+   * @param {string} [opts.entityId]
+   */
+  getWhatsAppTemplate(name, { entityId } = {}) {
+    return this.#request("GET", `/whatsapp-templates/${encodeURIComponent(name)}`, {
+      params: { entity_id: entityId },
+    });
+  }
 }
 
 export const api = new ApiClient();
+

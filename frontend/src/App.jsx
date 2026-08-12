@@ -15,6 +15,7 @@ import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 import SchedulesPage from "./pages/SchedulesPage";
 import ScheduleEditorPage from "./pages/ScheduleEditorPage";
+import AudiencesPage from "./pages/AudiencesPage";
 
 export default function App() {
   return (
@@ -49,6 +50,7 @@ export default function App() {
               element={<ScheduleEditorPage />}
             />
             <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/audiences" element={<AudiencesPage />} />
           </Route>
         </Route>
 

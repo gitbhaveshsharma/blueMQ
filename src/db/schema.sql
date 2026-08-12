@@ -455,3 +455,21 @@ CREATE INDEX IF NOT EXISTS idx_schedule_execution_logs_schedule
 CREATE INDEX IF NOT EXISTS idx_schedule_execution_logs_client
   ON schedule_execution_logs (client_id, triggered_at DESC);
 
+-- =============================================
+-- 8. Audiences (named user segments)
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS audiences (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id      VARCHAR(64) NOT NULL REFERENCES apps(app_id),
+  name        VARCHAR(255) NOT NULL,
+  description TEXT,
+  members     JSONB NOT NULL DEFAULT '[]',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_audiences_app_id
+  ON audiences (app_id, created_at DESC);
+
