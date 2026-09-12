@@ -301,6 +301,13 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Required: type, channel, body" });
     }
 
+    if (normalizedChannel === "whatsapp") {
+      return res.status(400).json({
+        error:
+          "WhatsApp templates are stored in Meta. Use POST /whatsapp-templates (and Sync WhatsApp via Meta) instead of POST /templates",
+      });
+    }
+
     if (!isValidPublicChannel(channel)) {
       return res.status(400).json({
         error: `Invalid channel. Allowed: ${getAllowedPublicChannels().join(", ")}`,

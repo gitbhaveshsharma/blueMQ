@@ -1,6 +1,25 @@
 export const TEMPLATE_FORMATS = Object.freeze([
   { id: "text", label: "Plain text" },
   { id: "html", label: "HTML" },
+  { id: "json", label: "JSON" },
+]);
+
+export const WHATSAPP_TEMPLATE_CATEGORIES = Object.freeze([
+  { id: "UTILITY", label: "Utility" },
+  { id: "MARKETING", label: "Marketing" },
+  { id: "AUTHENTICATION", label: "Authentication" },
+]);
+
+export const WHATSAPP_TEMPLATE_LANGUAGES = Object.freeze([
+  { id: "en", label: "English" },
+  { id: "en_US", label: "English (US)" },
+  { id: "en_GB", label: "English (UK)" },
+  { id: "hi", label: "Hindi" },
+  { id: "es", label: "Spanish" },
+  { id: "pt_BR", label: "Portuguese (Brazil)" },
+  { id: "ar", label: "Arabic" },
+  { id: "fr", label: "French" },
+  { id: "id", label: "Indonesian" },
 ]);
 
 export const TEMPLATE_CHANNELS = Object.freeze([
@@ -54,14 +73,14 @@ export const TEMPLATE_CHANNELS = Object.freeze([
     id: "whatsapp",
     label: "WhatsApp",
     description:
-      "Text messages for WhatsApp. Provider behavior depends on your routing settings.",
+      "Meta WhatsApp templates. Name, language, and category are submitted to Meta. Sync to cache names for /notify.",
     supportsTitle: false,
     supportsCta: false,
-    formats: ["text"],
+    formats: ["text", "json"],
     defaultFormat: "text",
-    bodyPlaceholder: "Hi {{student_name}}, your fee is due.",
+    bodyPlaceholder: "Hi {{1}}, your fee is due.",
     bodyHelp:
-      "Use plain text only. Approved template content is required outside the 24 hour window.",
+      "Plain text becomes the BODY component. JSON mode uses Meta components. Name must match [a-z0-9_].",
     previewType: "chat",
     previewTone: "whatsapp",
     badgeClass: "bg-green-50 text-green-700",

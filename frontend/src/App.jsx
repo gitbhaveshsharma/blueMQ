@@ -16,6 +16,7 @@ import SettingsPage from "./pages/SettingsPage";
 import SchedulesPage from "./pages/SchedulesPage";
 import ScheduleEditorPage from "./pages/ScheduleEditorPage";
 import AudiencesPage from "./pages/AudiencesPage";
+import AudienceDetailPage from "./pages/AudienceDetailPage";
 
 export default function App() {
   return (
@@ -31,6 +32,10 @@ export default function App() {
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/templates" element={<TemplatesPage />} />
             <Route path="/templates/new" element={<TemplateEditorPage />} />
+            <Route
+              path="/templates/whatsapp/:whatsappName/edit"
+              element={<TemplateEditorPage />}
+            />
             <Route
               path="/templates/:templateId/edit"
               element={<TemplateEditorPage />}
@@ -51,6 +56,10 @@ export default function App() {
             />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/audiences" element={<AudiencesPage />} />
+            <Route
+              path="/audiences/:audienceId"
+              element={<AudienceDetailPage />}
+            />
           </Route>
         </Route>
 

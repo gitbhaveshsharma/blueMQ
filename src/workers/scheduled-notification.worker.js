@@ -14,6 +14,12 @@ const {
 const { normalizeEntityId } = require("../utils/whatsapp-session");
 const { signRequest } = require("../utils/hmac.util");
 const { enqueueNotification } = require("../queues/enqueue");
+const {
+  findCachedSendableTemplate,
+  isSendableStatus,
+  buildWhatsAppSendTemplate,
+} = require("../utils/whatsapp-template");
+const { resolveTemplateAlias } = require("../utils/template-alias");
 
 const QUEUE_NAME = "scheduled-notification-poller";
 const STABLE_JOB_ID = "scheduled-notification-poll";
@@ -103,18 +109,35 @@ async function loadTemplatesForSchedule(schedule, notifications, client) {
 
   const templateCandidates = [
     ...new Set(
-      [...requestedChannels].flatMap((channel) =>
-        getTemplateChannelCandidates(channel),
-      ),
+      [...requestedChannels]
+        .filter((channel) => channel !== "whatsapp")
+        .flatMap((channel) => getTemplateChannelCandidates(channel)),
     ),
   ];
+  const dbChannels = [...requestedChannels].filter(
+    (channel) => channel !== "whatsapp",
+  );
+  const resolvedTypeByChannel = Object.fromEntries(
+    await Promise.all(
+      dbChannels.map(async (channel) => {
+        const alias = await resolveTemplateAlias({
+          appId: schedule.client_id,
+          channel,
+          notificationType: schedule.template_key,
+        });
+        return [channel, alias.templateName];
+      }),
+    ),
+  );
 
   if (templateCandidates.length === 0) {
     return {};
   }
 
+  const resolvedTypes = [...new Set(Object.values(resolvedTypeByChannel))];
   const { rows: templates } = await client.query(
     `SELECT
+       type,
        channel,
        title,
        body,
@@ -126,17 +149,20 @@ async function loadTemplatesForSchedule(schedule, notifications, client) {
        variant_key
      FROM templates
      WHERE app_id = $1
-       AND type = $2
+       AND type = ANY($2)
        AND channel = ANY($3)
        AND is_active = true
      ORDER BY channel ASC, updated_at DESC`,
-    [schedule.client_id, schedule.template_key, templateCandidates],
+    [schedule.client_id, resolvedTypes, templateCandidates],
   );
 
   const templateRowsByChannel = {};
   for (const tpl of templates) {
     const normalizedTemplateChannel = normalizePublicChannel(tpl.channel);
     if (!normalizedTemplateChannel) {
+      continue;
+    }
+    if (tpl.type !== resolvedTypeByChannel[normalizedTemplateChannel]) {
       continue;
     }
     if (!templateRowsByChannel[normalizedTemplateChannel]) {
@@ -351,6 +377,52 @@ async function processSchedule(schedule, client) {
 
       const templateMap = {};
       for (const channel of normalizedChannels) {
+        if (channel === "whatsapp") {
+          const language =
+            templateVariables?.language ||
+            templateVariables?.whatsapp_language ||
+            null;
+          const alias = await resolveTemplateAlias({
+            appId: schedule.client_id,
+            channel,
+            entityId: resolvedEntityId,
+            parentEntityId: resolvedParentEntityId,
+            notificationType: schedule.template_key,
+          });
+          const cacheRow = await findCachedSendableTemplate({
+            appId: schedule.client_id,
+            entityId: resolvedEntityId,
+            parentEntityId: resolvedParentEntityId,
+            name: alias.templateName,
+            language,
+          });
+          if (!cacheRow || !isSendableStatus(cacheRow.status)) {
+            console.warn(
+              `[schedule-worker] WhatsApp template "${alias.templateName}" missing or not sendable in cache`,
+            );
+          }
+          templateMap[channel] = buildWhatsAppSendTemplate({
+            cacheRow,
+            type: alias.templateName,
+            variables: templateVariables,
+            fallback: {
+              title:
+                item.title ||
+                templateVariables?.title ||
+                schedule.template_key.replace(/_/g, " "),
+              body:
+                item.body ||
+                templateVariables?.body ||
+                templateVariables?.message ||
+                `Notification: ${schedule.template_key}`,
+              bodyFormat: "text",
+              ctaText: templateVariables?.cta_text || null,
+              actionUrl: templateVariables?.cta_url || null,
+            },
+          });
+          continue;
+        }
+
         const channelTemplates = templateRowsByChannel[channel] || [];
         const selectedTemplate = pickBestTemplate(
           channelTemplates,

@@ -100,17 +100,60 @@ function PreviewCard({ title, body, ctaText, actionUrl }) {
 }
 
 // ─── PreviewChat ──────────────────────────────────────────────────────────────
-function PreviewChat({ body, tone }) {
-  const hasBody = Boolean(body?.trim());
+function PreviewChat({ body, tone, headerText, footerText, buttons, bodyFormat }) {
+  let header = headerText;
+  let message = body;
+  let footer = footerText;
+  let parsedButtons = buttons;
+  let jsonError = null;
+
+  if (tone === "whatsapp" && bodyFormat === "json") {
+    try {
+      const parsed = JSON.parse(body || "{}");
+      const components = Array.isArray(parsed) ? parsed : parsed.components || [];
+      header = components.find((c) => c.type === "HEADER")?.text || "";
+      message = components.find((c) => c.type === "BODY")?.text || "";
+      footer = components.find((c) => c.type === "FOOTER")?.text || "";
+      parsedButtons = components.find((c) => c.type === "BUTTONS")?.buttons || [];
+    } catch {
+      jsonError = "Invalid JSON";
+    }
+  }
+
+  const hasBody = Boolean(message?.trim());
   const toneClass = CHAT_TONE_CLASSES[tone] || CHAT_TONE_CLASSES.sms;
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-4">
+    <div className="rounded-lg border border-gray-200 bg-[#efeae2] p-4">
       <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${toneClass}`}>
-        <div className={hasBody ? "whitespace-pre-wrap" : "text-gray-400 italic"}>
-          {hasBody ? body : "No message yet"}
-        </div>
+        {jsonError ? (
+          <div className="text-red-600">{jsonError}</div>
+        ) : (
+          <>
+            {header ? (
+              <div className="mb-1 text-xs font-semibold opacity-80">{header}</div>
+            ) : null}
+            <div className={hasBody ? "whitespace-pre-wrap" : "text-gray-400 italic"}>
+              {hasBody ? message : "No message yet"}
+            </div>
+            {footer ? (
+              <div className="mt-2 text-[11px] opacity-70">{footer}</div>
+            ) : null}
+          </>
+        )}
       </div>
+      {Array.isArray(parsedButtons) && parsedButtons.length > 0 ? (
+        <div className="mt-2 flex max-w-[85%] flex-col gap-1">
+          {parsedButtons.map((button, index) => (
+            <div
+              key={`${button.text || "btn"}-${index}`}
+              className="rounded-lg border border-green-200 bg-white px-3 py-1.5 text-center text-xs font-medium text-green-800"
+            >
+              {button.text || button.type}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -264,6 +307,9 @@ export default function TemplatePreview({
   bodyFormat,
   ctaText,
   actionUrl,
+  headerText,
+  footerText,
+  buttons,
 }) {
   const channelConfig = getTemplateChannelConfig(channel);
   const PreviewRenderer = PREVIEW_RENDERERS[channelConfig.previewType] || PreviewCard;
@@ -282,6 +328,9 @@ export default function TemplatePreview({
         ctaText={ctaText}
         actionUrl={actionUrl}
         tone={channelConfig.previewTone}
+        headerText={headerText}
+        footerText={footerText}
+        buttons={buttons}
       />
 
       {ctaText && !actionUrl && (

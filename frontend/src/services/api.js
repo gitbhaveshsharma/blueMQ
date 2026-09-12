@@ -280,6 +280,78 @@ class ApiClient {
     return this.#request("DELETE", `/audiences/${id}`);
   }
 
+  getAudienceMembers(id, { page = 1, limit = 50 } = {}) {
+    return this.#request("GET", `/audiences/${encodeURIComponent(id)}/members`, {
+      params: { page, limit },
+    });
+  }
+
+  addAudienceMember(id, data) {
+    return this.#request(
+      "POST",
+      `/audiences/${encodeURIComponent(id)}/members`,
+      { body: data },
+    );
+  }
+
+  updateAudienceMember(id, memberId, data) {
+    return this.#request(
+      "PUT",
+      `/audiences/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
+      { body: data },
+    );
+  }
+
+  deleteAudienceMember(id, memberId) {
+    return this.#request(
+      "DELETE",
+      `/audiences/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`,
+    );
+  }
+
+  async importAudienceMembers(id, { file, mode = "append" }) {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("mode", mode);
+    const res = await fetch(
+      `${BASE_URL}/audiences/${encodeURIComponent(id)}/members/import`,
+      {
+        method: "POST",
+        headers: { "x-api-key": this.#apiKey },
+        body: form,
+      },
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `Import failed (${res.status})`);
+    }
+    return data;
+  }
+
+  notifyAudience(id, data) {
+    return this.#request(
+      "POST",
+      `/audiences/${encodeURIComponent(id)}/notify`,
+      { body: data },
+    );
+  }
+
+  async exportAudienceMembers(id, format = "csv") {
+    const url = new URL(
+      `${BASE_URL}/audiences/${encodeURIComponent(id)}/members/export`,
+      window.location.origin,
+    );
+    url.searchParams.set("format", format);
+    const res = await fetch(url, {
+      headers: { "x-api-key": this.#apiKey },
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Export failed (${res.status})`);
+    }
+    return res.blob();
+  }
+
   // ── WhatsApp Templates (Meta API proxy) ──
   /**
    * List approved Meta WhatsApp templates.
@@ -287,22 +359,51 @@ class ApiClient {
    * @param {string} [opts.entityId]  - which WhatsApp session to use
    * @param {string} [opts.name]      - filter by template name
    */
-  getWhatsAppTemplates({ entityId, name } = {}) {
+  getWhatsAppTemplates({ entityId, name, source, status } = {}) {
     return this.#request("GET", "/whatsapp-templates", {
-      params: { entity_id: entityId, name },
+      params: { entity_id: entityId, name, source, status },
     });
   }
 
-  /**
-   * Get a single Meta WhatsApp template by name.
-   * @param {string} name
-   * @param {object} [opts]
-   * @param {string} [opts.entityId]
-   */
-  getWhatsAppTemplate(name, { entityId } = {}) {
+  getWhatsAppTemplate(name, { entityId, source } = {}) {
     return this.#request("GET", `/whatsapp-templates/${encodeURIComponent(name)}`, {
-      params: { entity_id: entityId },
+      params: { entity_id: entityId, source },
     });
+  }
+
+  createWhatsAppTemplate(data) {
+    return this.#request("POST", "/whatsapp-templates", { body: data });
+  }
+
+  syncWhatsAppTemplates({ entityId } = {}) {
+    return this.#request("POST", "/whatsapp-templates/sync", {
+      params: { entity_id: entityId },
+      body: entityId ? { entity_id: entityId } : {},
+    });
+  }
+
+  getTemplateAliases({ channel, entityId } = {}) {
+    return this.#request("GET", "/template-aliases", {
+      params: { channel, entity_id: entityId },
+    });
+  }
+
+  saveTemplateAlias(data) {
+    if (data.id) {
+      return this.#request(
+        "PUT",
+        `/template-aliases/${encodeURIComponent(data.id)}`,
+        { body: data },
+      );
+    }
+    return this.#request("POST", "/template-aliases", { body: data });
+  }
+
+  deleteTemplateAlias(id) {
+    return this.#request(
+      "DELETE",
+      `/template-aliases/${encodeURIComponent(id)}`,
+    );
   }
 }
 

@@ -473,3 +473,111 @@ CREATE TABLE IF NOT EXISTS audiences (
 CREATE INDEX IF NOT EXISTS idx_audiences_app_id
   ON audiences (app_id, created_at DESC);
 
+-- Members are normalized for paginated CRUD, streaming exports and broadcasts.
+-- audiences.members remains temporarily for rollback compatibility.
+CREATE TABLE IF NOT EXISTS audience_members (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  audience_id         UUID NOT NULL REFERENCES audiences(id) ON DELETE CASCADE,
+  app_id              VARCHAR(64) NOT NULL REFERENCES apps(app_id) ON DELETE CASCADE,
+  user_id             TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+  email               TEXT,
+  phone               TEXT,
+  fcm_token           TEXT,
+  onesignal_player_id TEXT,
+  entity_id           VARCHAR(255),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_audience_member_contact CHECK (
+    email IS NOT NULL OR phone IS NOT NULL OR fcm_token IS NOT NULL
+    OR onesignal_player_id IS NOT NULL
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_audience_members_page
+  ON audience_members (audience_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_audience_members_app
+  ON audience_members (app_id, audience_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_audience_members_user
+  ON audience_members (audience_id, user_id);
+
+INSERT INTO audience_members (
+  audience_id, app_id, user_id, email, phone, fcm_token,
+  onesignal_player_id, entity_id
+)
+SELECT
+  a.id,
+  a.app_id,
+  COALESCE(
+    NULLIF(BTRIM(member->>'user_id'), ''),
+    'legacy:' || md5(a.id::text || ':' || member_ordinality::text || ':' || member::text)
+  ),
+  NULLIF(BTRIM(member->>'email'), ''),
+  NULLIF(BTRIM(member->>'phone'), ''),
+  NULLIF(BTRIM(member->>'fcm_token'), ''),
+  NULLIF(BTRIM(member->>'onesignal_player_id'), ''),
+  NULLIF(BTRIM(member->>'entity_id'), '')
+FROM audiences a
+CROSS JOIN LATERAL jsonb_array_elements(a.members)
+  WITH ORDINALITY AS legacy(member, member_ordinality)
+WHERE jsonb_typeof(a.members) = 'array'
+  AND (
+    NULLIF(BTRIM(member->>'email'), '') IS NOT NULL
+    OR NULLIF(BTRIM(member->>'phone'), '') IS NOT NULL
+    OR NULLIF(BTRIM(member->>'fcm_token'), '') IS NOT NULL
+    OR NULLIF(BTRIM(member->>'onesignal_player_id'), '') IS NOT NULL
+  )
+ON CONFLICT (audience_id, user_id) DO NOTHING;
+
+-- =============================================
+-- 9. WhatsApp Meta template cache (source of truth is Meta)
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS whatsapp_meta_templates (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id             VARCHAR(64) NOT NULL REFERENCES apps(app_id),
+  entity_id          VARCHAR(255) NOT NULL,
+  meta_id            VARCHAR(64),
+  name               VARCHAR(512) NOT NULL,
+  language           VARCHAR(32) NOT NULL,
+  status             VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+  category           VARCHAR(32),
+  components         JSONB NOT NULL DEFAULT '[]',
+  last_updated_time  TIMESTAMPTZ,
+  cached_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_id, entity_id, name, language)
+);
+
+CREATE INDEX IF NOT EXISTS idx_whatsapp_meta_templates_lookup
+  ON whatsapp_meta_templates (app_id, entity_id, name, status);
+
+-- =============================================
+-- 10. Channel-aware notification type → template aliases
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS template_alias (
+  id                BIGSERIAL PRIMARY KEY,
+  app_id            VARCHAR(64) NOT NULL REFERENCES apps(app_id) ON DELETE CASCADE,
+  channel           VARCHAR(32) NOT NULL,
+  entity_id         VARCHAR(255) NOT NULL DEFAULT '',
+  notification_type TEXT NOT NULL,
+  resolves_to       TEXT NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_id, channel, entity_id, notification_type),
+  CHECK (notification_type <> resolves_to)
+);
+
+CREATE INDEX IF NOT EXISTS idx_template_alias_lookup
+  ON template_alias (app_id, channel, entity_id, notification_type);
+
+INSERT INTO template_alias
+  (app_id, channel, entity_id, notification_type, resolves_to)
+SELECT DISTINCT
+  app_id, 'whatsapp', entity_id,
+  'coaching_profile_live', 'coaching_profile_live_v2'
+FROM whatsapp_meta_templates
+WHERE name = 'coaching_profile_live_v2'
+ON CONFLICT (app_id, channel, entity_id, notification_type) DO NOTHING;
+

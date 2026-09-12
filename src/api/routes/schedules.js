@@ -17,6 +17,12 @@ const {
 const { normalizeEntityId } = require("../../utils/whatsapp-session");
 const { signRequest } = require("../../utils/hmac.util");
 const { enqueueNotification } = require("../../queues/enqueue");
+const {
+  findCachedSendableTemplate,
+  isSendableStatus,
+  buildWhatsAppSendTemplate,
+} = require("../../utils/whatsapp-template");
+const { resolveTemplateAlias } = require("../../utils/template-alias");
 
 const router = Router();
 
@@ -192,16 +198,33 @@ async function processNotifications(notifications, schedule) {
 
   const templateCandidates = [
     ...new Set(
-      [...requestedChannels].flatMap((channel) =>
-        getTemplateChannelCandidates(channel),
-      ),
+      [...requestedChannels]
+        .filter((channel) => channel !== "whatsapp")
+        .flatMap((channel) => getTemplateChannelCandidates(channel)),
     ),
   ];
+  const dbChannels = [...requestedChannels].filter(
+    (channel) => channel !== "whatsapp",
+  );
+  const resolvedTypeByChannel = Object.fromEntries(
+    await Promise.all(
+      dbChannels.map(async (channel) => {
+        const alias = await resolveTemplateAlias({
+          appId: schedule.client_id,
+          channel,
+          notificationType: schedule.template_key,
+        });
+        return [channel, alias.templateName];
+      }),
+    ),
+  );
 
   let templateRowsByChannel = {};
   if (templateCandidates.length > 0) {
+    const resolvedTypes = [...new Set(Object.values(resolvedTypeByChannel))];
     const templates = await sql`
       SELECT
+        type,
         channel,
         title,
         body,
@@ -213,7 +236,7 @@ async function processNotifications(notifications, schedule) {
         variant_key
       FROM templates
       WHERE app_id = ${schedule.client_id}
-        AND type = ${schedule.template_key}
+        AND type = ANY(${resolvedTypes})
         AND channel = ANY(${templateCandidates})
         AND is_active = true
       ORDER BY channel ASC, updated_at DESC
@@ -223,6 +246,9 @@ async function processNotifications(notifications, schedule) {
     for (const tpl of templates) {
       const normalizedTemplateChannel = normalizePublicChannel(tpl.channel);
       if (!normalizedTemplateChannel) {
+        continue;
+      }
+      if (tpl.type !== resolvedTypeByChannel[normalizedTemplateChannel]) {
         continue;
       }
       if (!templateRowsByChannel[normalizedTemplateChannel]) {
@@ -268,6 +294,52 @@ async function processNotifications(notifications, schedule) {
 
       const templateMap = {};
       for (const channel of normalizedChannels) {
+        if (channel === "whatsapp") {
+          const language =
+            templateVariables?.language ||
+            templateVariables?.whatsapp_language ||
+            null;
+          const alias = await resolveTemplateAlias({
+            appId: schedule.client_id,
+            channel,
+            entityId: resolvedEntityId,
+            parentEntityId: resolvedParentEntityId,
+            notificationType: schedule.template_key,
+          });
+          const cacheRow = await findCachedSendableTemplate({
+            appId: schedule.client_id,
+            entityId: resolvedEntityId,
+            parentEntityId: resolvedParentEntityId,
+            name: alias.templateName,
+            language,
+          });
+          if (!cacheRow || !isSendableStatus(cacheRow.status)) {
+            console.warn(
+              `[schedules] WhatsApp template "${alias.templateName}" missing or not sendable in cache`,
+            );
+          }
+          templateMap[channel] = buildWhatsAppSendTemplate({
+            cacheRow,
+            type: alias.templateName,
+            variables: templateVariables,
+            fallback: {
+              title:
+                item.title ||
+                templateVariables?.title ||
+                schedule.template_key.replace(/_/g, " "),
+              body:
+                item.body ||
+                templateVariables?.body ||
+                templateVariables?.message ||
+                `Notification: ${schedule.template_key}`,
+              bodyFormat: "text",
+              ctaText: templateVariables?.cta_text || null,
+              actionUrl: templateVariables?.cta_url || null,
+            },
+          });
+          continue;
+        }
+
         const channelTemplates = templateRowsByChannel[channel] || [];
         const selectedTemplate = pickBestTemplate(
           channelTemplates,

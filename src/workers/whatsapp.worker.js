@@ -5,6 +5,10 @@ const { getAppProvider } = require("../providers/per-app-factory");
 const { getDb } = require("../db");
 const config = require("../config");
 const { resolveWhatsAppSession } = require("../utils/whatsapp-session");
+const {
+  inferCacheStatusFromMetaError,
+  markCacheStatus,
+} = require("../utils/whatsapp-template");
 
 /**
  * WhatsApp worker — custom logic on top of the base pattern.
@@ -37,6 +41,9 @@ function createWhatsAppWorker() {
         user,
         actionUrl,
         data,
+        templateName,
+        language,
+        parameters,
       } = job.data;
 
       const attemptNumber = job.attemptsMade + 1;
@@ -55,6 +62,9 @@ function createWhatsAppWorker() {
         user,
         actionUrl,
         data,
+        templateName,
+        language,
+        parameters,
       };
 
       let resolvedProvider;
@@ -179,6 +189,27 @@ function createWhatsAppWorker() {
 
         result = await resolvedProvider.sendWhatsApp(metaPayload);
         result.provider = resolvedProvider.name;
+
+        if (
+          !result.success &&
+          templateName &&
+          language &&
+          (resolvedEntityId || entityId)
+        ) {
+          const nextStatus = inferCacheStatusFromMetaError(
+            result.errorCode,
+            result.errorMessage || result.error,
+          );
+          if (nextStatus) {
+            await markCacheStatus({
+              appId,
+              entityId: resolvedEntityId || entityId,
+              name: templateName,
+              language,
+              status: nextStatus,
+            });
+          }
+        }
       }
 
       // ─── 3. Log result ───

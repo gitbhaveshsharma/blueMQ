@@ -1,4 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  createElement,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
@@ -20,7 +27,6 @@ import {
   Mail,
   MessageSquare,
   Bell,
-  Smartphone,
   Layers,
   RefreshCw,
   X,
@@ -46,7 +52,10 @@ import {
   Edit3,
   Zap,
   ChevronRight,
+  Link2,
 } from "lucide-react";
+import WhatsAppIcon from "../components/icons/WhatsAppIcon";
+import AudienceManager from "../components/audience/AudienceManager";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,7 +63,7 @@ const CHANNELS = [
   { id: "push", label: "Push", Icon: Bell, color: "blue" },
   { id: "email", label: "Email", Icon: Mail, color: "violet" },
   { id: "sms", label: "SMS", Icon: MessageSquare, color: "amber" },
-  { id: "whatsapp", label: "WhatsApp", Icon: Smartphone, color: "green" },
+  { id: "whatsapp", label: "WhatsApp", Icon: WhatsAppIcon, color: "green" },
   { id: "in_app", label: "In-App", Icon: Layers, color: "rose" },
 ];
 
@@ -103,11 +112,83 @@ function extractVars(text) {
   return [...new Set(matches.map((m) => m[1]))];
 }
 
+/**
+ * Text scanned for {{placeholders}}. WhatsApp content is read-only Meta copy,
+ * so it publishes the placeholder list Meta expects (which also covers
+ * dynamic buttons) instead of the editable subject/body.
+ */
+function variableText(content) {
+  if (!content) return "";
+  return [
+    content.subject || "",
+    content.body || "",
+    content.templateVarsText || "",
+  ].join(" ");
+}
+
 /** Count SMS segments (1 segment = 160 GSM7 chars). */
 function smsSegmentCount(text) {
   const len = (text || "").length;
   if (len <= 160) return 1;
   return Math.ceil(len / 153);
+}
+
+/** Normalise text so "Fee Due" and "fee_due" compare equal. */
+function normalizeSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Loose match used by the type search — higher score = better match. */
+function matchScore(candidate, query) {
+  const c = normalizeSearchText(candidate);
+  const q = normalizeSearchText(query);
+  if (!q) return 1;
+  if (c === q) return 100;
+  if (c.startsWith(q)) return 80;
+  if (c.includes(q)) return 60;
+
+  const tokens = q.split(" ").filter(Boolean);
+  if (tokens.length > 1 && tokens.every((token) => c.includes(token))) return 40;
+
+  // Fall back to a subsequence check so "fd" still finds "fee_due".
+  const flatCandidate = c.replace(/ /g, "");
+  const flatQuery = q.replace(/ /g, "");
+  let cursor = 0;
+  for (const char of flatQuery) {
+    cursor = flatCandidate.indexOf(char, cursor);
+    if (cursor === -1) return -1;
+    cursor += 1;
+  }
+  return 20;
+}
+
+const WA_STATUS_STYLES = {
+  APPROVED: "bg-green-100 text-green-700",
+  PENDING: "bg-amber-100 text-amber-700",
+  IN_APPEAL: "bg-amber-100 text-amber-700",
+  PENDING_DELETION: "bg-orange-100 text-orange-700",
+  PAUSED: "bg-orange-100 text-orange-700",
+  REJECTED: "bg-red-100 text-red-700",
+  DISABLED: "bg-red-100 text-red-700",
+  DELETED: "bg-gray-200 text-gray-600",
+};
+
+function waStatusClass(status) {
+  return (
+    WA_STATUS_STYLES[String(status || "").toUpperCase()] ||
+    "bg-gray-100 text-gray-600"
+  );
+}
+
+function isApprovedStatus(status) {
+  return String(status || "").toUpperCase() === "APPROVED";
+}
+
+function channelLabel(channel) {
+  return CHANNELS.find((c) => c.id === channel)?.label || channel;
 }
 
 /** Build a CSS class string for the input field */
@@ -135,7 +216,7 @@ function EmailToolbar({ editor }) {
           : "text-gray-500 hover:bg-gray-100 hover:text-gray-800"
       }`}
     >
-      <Icon size={14} />
+      {createElement(Icon, { size: 14 })}
     </button>
   );
 
@@ -350,158 +431,263 @@ function SmsSection({ content, onChange, templates }) {
 
 // ─── WhatsApp Section ─────────────────────────────────────────────────────────
 
-function WhatsAppSection({ content, onChange, entityId }) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [waTemplates, setWaTemplates] = useState([]);
-  const [fetching, setFetching] = useState(false);
-  const [fetchError, setFetchError] = useState("");
-  const [selectedTemplate, setSelectedTemplate] = useState(null);
-  const debounceRef = useRef(null);
+function WhatsAppSection({
+  content,
+  onChange,
+  notifType,
+  waTemplates,
+  templateAliases,
+  loading,
+  error,
+  onReload,
+}) {
+  const activeAlias = templateAliases.find(
+    (alias) =>
+      alias.channel === "whatsapp" &&
+      normalizeSearchText(alias.notification_type) ===
+        normalizeSearchText(notifType),
+  );
+  const resolvedTemplateName = activeAlias?.resolves_to || notifType;
+  const typeKey = normalizeSearchText(resolvedTemplateName);
 
-  const fetchTemplates = useCallback(async (name) => {
-    setFetching(true);
-    setFetchError("");
-    try {
-      const data = await api.getWhatsAppTemplates({ entityId, name: name || undefined });
-      setWaTemplates(data.data || []);
-    } catch (err) {
-      setFetchError(err.message);
-      setWaTemplates([]);
-    } finally {
-      setFetching(false);
+  const matches = useMemo(() => {
+    if (!typeKey) return [];
+    // The cache can hold the same name under several entities — one row per
+    // language is enough here, preferring an approved one.
+    const byLanguage = new Map();
+    for (const tpl of waTemplates) {
+      if (normalizeSearchText(tpl.name) !== typeKey) continue;
+      const current = byLanguage.get(tpl.language);
+      if (!current || (!isApprovedStatus(current.status) && isApprovedStatus(tpl.status))) {
+        byLanguage.set(tpl.language, tpl);
+      }
     }
-  }, [entityId]);
+    return [...byLanguage.values()];
+  }, [waTemplates, typeKey]);
 
+  const selected = useMemo(() => {
+    if (matches.length === 0) return null;
+    const chosen = matches.find(
+      (tpl) => tpl.language === content.templateLanguage,
+    );
+    if (chosen) return chosen;
+    return matches.find((tpl) => isApprovedStatus(tpl.status)) || matches[0];
+  }, [matches, content.templateLanguage]);
+
+  // Keep the parent content in sync: the template text drives the placeholders
+  // rendered by the Template Variables section.
   useEffect(() => {
-    fetchTemplates("");
-  }, [fetchTemplates]);
+    if (!selected) {
+      if (content.templateName) {
+        onChange({
+          ...content,
+          templateName: "",
+          templateLanguage: "",
+          templateStatus: "",
+          templateHeader: "",
+          templateBody: "",
+          templateFooter: "",
+          templateVarsText: "",
+        });
+      }
+      return;
+    }
 
-  function handleSearch(val) {
-    setSearchQuery(val);
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchTemplates(val), 500);
-  }
+    if (
+      content.templateName === selected.name &&
+      content.templateLanguage === selected.language &&
+      content.templateStatus === selected.status
+    ) {
+      return;
+    }
 
-  function selectTemplate(tpl) {
-    setSelectedTemplate(tpl);
     onChange({
       ...content,
-      templateName: tpl.name,
-      templateId: tpl.id,
-      body: tpl.body_text,
-      headerText: tpl.header_text,
-      footerText: tpl.footer_text,
+      templateName: selected.name,
+      templateLanguage: selected.language,
+      templateStatus: selected.status,
+      templateId: selected.meta_id || selected.id,
+      templateHeader: selected.header_text || "",
+      templateBody: selected.body_text || "",
+      templateFooter: selected.footer_text || "",
+      templateVarsText: (selected.variables || [])
+        .map((v) => `{{${v.index}}}`)
+        .join(" "),
       format: "text",
-      waVars: tpl.variables.map((v) => ({ ...v, value: "" })),
     });
+  }, [selected, content, onChange]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-4 text-sm text-gray-500">
+        <RefreshCw size={14} className="animate-spin" />
+        Loading synced WhatsApp templates…
+      </div>
+    );
   }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <p>{error}</p>
+        <button
+          type="button"
+          onClick={onReload}
+          className="mt-2 text-xs font-medium text-red-700 underline"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (!typeKey) {
+    return (
+      <p className="py-4 text-sm text-gray-400">
+        Pick a Notification Type above — the matching WhatsApp template loads
+        here automatically.
+      </p>
+    );
+  }
+
+  if (matches.length === 0) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        <p className="font-medium">
+          No synced WhatsApp template named “{resolvedTemplateName.trim()}”
+        </p>
+        {activeAlias ? (
+          <p className="mt-1 text-xs">
+            <code>{activeAlias.notification_type}</code> is aliased to{" "}
+            <code>{activeAlias.resolves_to}</code>, which is not in the cache.
+          </p>
+        ) : null}
+        <p className="mt-1 text-xs">
+          Run <span className="font-semibold">Sync WhatsApp via Meta</span> on
+          the Templates page, or create the template there. Until then WhatsApp
+          sends a plain-text fallback message.
+        </p>
+      </div>
+    );
+  }
+
+  const approved = isApprovedStatus(selected?.status);
 
   return (
     <div className="space-y-4">
-      {/* Template search */}
-      <div>
-        <label className={labelCls}>WhatsApp Template</label>
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => handleSearch(e.target.value)}
-            placeholder="Search Meta template by name…"
-            className={`${inputCls} pl-8`}
-          />
-          {fetching && (
-            <RefreshCw size={13} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400" />
-          )}
+      <div
+        className={`rounded-lg border p-4 space-y-3 ${
+          approved
+            ? "border-green-200 bg-green-50"
+            : "border-amber-200 bg-amber-50"
+        }`}
+      >
+        {activeAlias ? (
+          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-2.5 py-2 text-xs text-indigo-800">
+            <Link2 size={12} className="shrink-0" />
+            <span>Alias — this send uses</span>
+            <code className="rounded bg-white px-1.5 py-0.5 font-semibold">
+              {activeAlias.resolves_to}
+            </code>
+            <span className="text-indigo-500">
+              instead of {activeAlias.notification_type}
+            </span>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-gray-900">
+              {selected.name}
+            </p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {selected.language}
+              {selected.category ? ` · ${selected.category}` : ""}
+            </p>
+          </div>
+          <span
+            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${waStatusClass(
+              selected.status,
+            )}`}
+          >
+            {selected.status || "UNKNOWN"}
+          </span>
         </div>
-        {fetchError && (
-          <p className="mt-1 text-xs text-red-500">{fetchError}</p>
+
+        {!approved && (
+          <p className="text-xs text-amber-800">
+            Meta has not approved this template, so it cannot be sent as a
+            template yet. WhatsApp will fall back to a plain-text message.
+          </p>
+        )}
+
+        {matches.length > 1 && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-600">
+              Language
+            </label>
+            <select
+              value={selected.language}
+              onChange={(e) =>
+                // Clearing the name lets the sync effect refill the body text
+                // for the newly picked language.
+                onChange({
+                  ...content,
+                  templateLanguage: e.target.value,
+                  templateName: "",
+                })
+              }
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            >
+              {matches.map((tpl) => (
+                <option key={`${tpl.name}-${tpl.language}`} value={tpl.language}>
+                  {tpl.language} — {tpl.status}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {selected.header_text && (
+          <div>
+            <p className="mb-0.5 text-xs font-medium text-gray-600">Header</p>
+            <p className="text-sm font-medium text-gray-900">
+              {selected.header_text}
+            </p>
+          </div>
+        )}
+        <div>
+          <p className="mb-0.5 text-xs font-medium text-gray-600">Body</p>
+          <p className="whitespace-pre-wrap text-sm text-gray-900">
+            {selected.body_text}
+          </p>
+        </div>
+        {selected.footer_text && (
+          <p className="text-xs text-gray-500">{selected.footer_text}</p>
+        )}
+
+        {(selected.variables || []).length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-gray-200/70 pt-3">
+            <span className="text-xs font-medium text-gray-600">
+              Fill in Template Variables below:
+            </span>
+            {selected.variables.map((v) => (
+              <code
+                key={`${v.component}-${v.index}`}
+                className="rounded bg-white px-1.5 py-0.5 text-xs text-gray-700 ring-1 ring-gray-200"
+              >
+                {`{{${v.index}}}`}
+                {v.component !== "BODY" && (
+                  <span className="ml-1 text-gray-400">
+                    {v.component === "BUTTON"
+                      ? `${v.button_text || "button"} link`
+                      : "header"}
+                  </span>
+                )}
+              </code>
+            ))}
+          </div>
         )}
       </div>
-
-      {/* Template list */}
-      {waTemplates.length > 0 && !selectedTemplate && (
-        <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
-          {waTemplates.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => selectTemplate(t)}
-              className="flex w-full items-start gap-3 p-3 text-left hover:bg-green-50 transition-colors"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-gray-900 text-sm">{t.name}</p>
-                <p className="text-xs text-gray-500 truncate mt-0.5">{t.body_text}</p>
-              </div>
-              <span className="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-                {t.language}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Selected template */}
-      {selectedTemplate && (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-semibold text-green-900 text-sm">{selectedTemplate.name}</p>
-              <p className="text-xs text-green-600">{selectedTemplate.language} · {selectedTemplate.category}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => { setSelectedTemplate(null); onChange({ ...content, templateName: "", templateId: "", waVars: [] }); }}
-              className="rounded-lg p-1 text-green-400 hover:bg-green-100 hover:text-green-600 transition-colors"
-            >
-              <X size={14} />
-            </button>
-          </div>
-
-          {selectedTemplate.header_text && (
-            <div>
-              <p className="text-xs font-medium text-green-700 mb-0.5">Header</p>
-              <p className="text-sm text-green-900 font-medium">{selectedTemplate.header_text}</p>
-            </div>
-          )}
-          <div>
-            <p className="text-xs font-medium text-green-700 mb-0.5">Body</p>
-            <p className="text-sm text-green-900 whitespace-pre-wrap">{selectedTemplate.body_text}</p>
-          </div>
-          {selectedTemplate.footer_text && (
-            <p className="text-xs text-green-600">{selectedTemplate.footer_text}</p>
-          )}
-
-          {/* Variable inputs for WA template */}
-          {selectedTemplate.variables.length > 0 && (
-            <div className="space-y-2 border-t border-green-200 pt-3">
-              <p className="text-xs font-semibold text-green-800">Template Variables</p>
-              {selectedTemplate.variables.map((v, i) => (
-                <div key={v.index} className="flex items-center gap-2">
-                  <code className="shrink-0 rounded bg-green-100 px-2 py-1 text-xs text-green-800">{`{{${v.index}}}`}</code>
-                  <input
-                    type="text"
-                    value={content.waVars?.[i]?.value || ""}
-                    onChange={(e) => {
-                      const vars = [...(content.waVars || [])];
-                      vars[i] = { ...vars[i], value: e.target.value };
-                      onChange({ ...content, waVars: vars });
-                    }}
-                    placeholder={`Value for {{${v.index}}}`}
-                    className={inputCls}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {waTemplates.length === 0 && !fetching && !fetchError && !selectedTemplate && (
-        <p className="text-sm text-gray-400 text-center py-4">
-          No approved templates found. Check your WhatsApp Business Account.
-        </p>
-      )}
     </div>
   );
 }
@@ -584,17 +770,260 @@ function TemplateSelector({ channel, templates, onSelect }) {
   );
 }
 
+// ─── Notification Type Search ─────────────────────────────────────────────────
+
+/** Group templates and configured aliases under their incoming type name. */
+function buildTypeIndex(dbTemplates, waTemplates, aliases) {
+  const waByName = new Map();
+  for (const tpl of waTemplates) {
+    const name = tpl.name || tpl.type;
+    if (!name) continue;
+    if (!waByName.has(name)) waByName.set(name, []);
+    waByName.get(name).push(tpl);
+  }
+
+  const map = new Map();
+
+  function entryFor(type) {
+    if (!map.has(type)) {
+      map.set(type, {
+        type,
+        channels: new Set(),
+        waRows: [],
+        preview: "",
+        aliases: [],
+      });
+    }
+    return map.get(type);
+  }
+
+  for (const tpl of dbTemplates) {
+    if (!tpl.type) continue;
+    const entry = entryFor(tpl.type);
+    entry.channels.add(tpl.channel);
+    if (!entry.preview) entry.preview = tpl.title || tpl.body || "";
+  }
+
+  for (const [name, rows] of waByName) {
+    const entry = entryFor(name);
+    entry.channels.add("whatsapp");
+    entry.waRows.push(...rows);
+    if (!entry.preview) entry.preview = rows[0].body_text || "";
+  }
+
+  // An alias wins on send, so the entry should describe the target template.
+  for (const alias of aliases) {
+    const entry = entryFor(alias.notification_type);
+    entry.channels.add(alias.channel);
+    entry.aliases.push(alias);
+    if (alias.channel === "whatsapp") {
+      const targetRows = waByName.get(alias.resolves_to) || [];
+      entry.waRows = targetRows;
+      entry.preview = targetRows[0]?.body_text || `Uses ${alias.resolves_to}`;
+    }
+  }
+
+  return [...map.values()].map((entry) => ({
+    ...entry,
+    channels: CHANNELS.filter((c) => entry.channels.has(c.id)),
+    // Only flag a status when nothing approved is available to send.
+    waIssue: entry.waRows.some((row) => isApprovedStatus(row.status))
+      ? null
+      : entry.waRows[0] || null,
+  }));
+}
+
+function TypeSearchField({
+  value,
+  onChange,
+  dbTemplates,
+  waTemplates,
+  aliases,
+  loading,
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const wrapRef = useRef(null);
+
+  const entries = useMemo(
+    () => buildTypeIndex(dbTemplates, waTemplates, aliases),
+    [dbTemplates, waTemplates, aliases],
+  );
+
+  const results = useMemo(() => {
+    return entries
+      .map((entry) => ({ entry, score: matchScore(entry.type, value) }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score || a.entry.type.localeCompare(b.entry.type))
+      .slice(0, 8)
+      .map((r) => r.entry);
+  }, [entries, value]);
+
+  // Results shrink as the query narrows, so keep the highlight in range.
+  const highlighted = Math.min(activeIndex, Math.max(results.length - 1, 0));
+
+  useEffect(() => {
+    function handleOutside(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, []);
+
+  function select(entry) {
+    onChange(entry.type);
+    setOpen(false);
+  }
+
+  function handleKeyDown(e) {
+    if (!open) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex(Math.min(highlighted + 1, results.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex(Math.max(highlighted - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (results[highlighted]) select(results[highlighted]);
+      else setOpen(false);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <Search
+        size={14}
+        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+      />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setActiveIndex(0);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={handleKeyDown}
+        placeholder="Search or type — e.g. fee_due, class_reminder"
+        autoComplete="off"
+        className={`${inputCls} pl-8 ${value ? "pr-9" : ""}`}
+      />
+      {loading ? (
+        <RefreshCw
+          size={13}
+          className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400"
+        />
+      ) : (
+        value && (
+          <button
+            type="button"
+            onClick={() => {
+              onChange("");
+              setActiveIndex(0);
+              setOpen(true);
+            }}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+          >
+            <X size={13} />
+          </button>
+        )
+      )}
+
+      {open && (
+        <div className="absolute z-20 mt-1.5 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+          {results.length === 0 ? (
+            <p className="px-4 py-3 text-xs text-gray-400">
+              {entries.length === 0
+                ? "No templates yet — type any notification type to send."
+                : "No matching template. This type will be sent as-is."}
+            </p>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto py-1">
+              {results.map((entry, i) => (
+                <li key={entry.type}>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setActiveIndex(i)}
+                    onClick={() => select(entry)}
+                    className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+                      i === highlighted ? "bg-indigo-50" : "hover:bg-gray-50"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-gray-900">
+                        {entry.type}
+                      </p>
+                      {entry.aliases.map((alias) => (
+                        <p
+                          key={`${alias.channel}-${alias.resolves_to}`}
+                          className="flex items-center gap-1 truncate text-[11px] text-indigo-600"
+                        >
+                          <Link2 size={10} className="shrink-0" />
+                          {channelLabel(alias.channel)} sends
+                          <span className="truncate font-semibold">
+                            {alias.resolves_to}
+                          </span>
+                        </p>
+                      ))}
+                      {entry.preview && (
+                        <p className="truncate text-xs text-gray-400">
+                          {entry.preview}
+                        </p>
+                      )}
+                    </div>
+                    {entry.waIssue && (
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${waStatusClass(
+                          entry.waIssue.status,
+                        )}`}
+                      >
+                        {entry.waIssue.status}
+                      </span>
+                    )}
+                    <span className="flex shrink-0 items-center gap-1">
+                      {entry.channels.map(({ id, label, Icon, color }) => (
+                        <span
+                          key={id}
+                          aria-label={label}
+                          className={`group/ch relative flex h-5 w-5 items-center justify-center rounded ${CHANNEL_COLORS[color].badge}`}
+                        >
+                          {createElement(Icon, { size: 11 })}
+                          <span
+                            role="tooltip"
+                            className="pointer-events-none absolute right-full top-1/2 z-30 mr-1.5 -translate-y-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-[10px] font-medium text-white opacity-0 shadow-sm transition-opacity group-hover/ch:opacity-100"
+                          >
+                            {label}
+                          </span>
+                        </span>
+                      ))}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Variable Section ─────────────────────────────────────────────────────────
 
 function VariableSection({ channelContents, selectedChannels, sharedVars, setSharedVars, perChannelVars, setPerChannelVars, useShared, setUseShared }) {
   // Collect all vars across selected channels (union)
   const allVars = [...new Set(
-    selectedChannels.flatMap((ch) => {
-      const c = channelContents[ch];
-      if (!c) return [];
-      const text = [c.subject || "", c.body || ""].join(" ");
-      return extractVars(text);
-    })
+    selectedChannels.flatMap((ch) => extractVars(variableText(channelContents[ch]))),
   )];
 
   if (allVars.length === 0) return null;
@@ -661,10 +1090,7 @@ function VariableSection({ channelContents, selectedChannels, sharedVars, setSha
       ) : (
         <div className="space-y-4">
           {selectedChannels.map((ch) => {
-            const chContent = channelContents[ch];
-            if (!chContent) return null;
-            const chText = [chContent.subject || "", chContent.body || ""].join(" ");
-            const chVars = extractVars(chText);
+            const chVars = extractVars(variableText(channelContents[ch]));
             if (chVars.length === 0) return null;
             const channelCfg = CHANNELS.find((c) => c.id === ch);
             return (
@@ -836,7 +1262,9 @@ function ScheduleSection({ scheduleOpts, setScheduleOpts }) {
 
 // ─── Audience Section ─────────────────────────────────────────────────────────
 
-function AudienceSection({ recipientMode, setRecipientMode, singleUser, setSingleUser, selectedAudienceId, setSelectedAudienceId, audiences, loadingAudiences }) {
+function AudienceSection({ recipientMode, setRecipientMode, singleUser, setSingleUser, selectedAudienceId, setSelectedAudienceId, audiences, loadingAudiences, waSessions, onManageAudience }) {
+  const ownEntityId = waSessions[0]?.entity_id || "";
+
   return (
     <div className="space-y-4">
       {/* Mode toggle */}
@@ -855,7 +1283,7 @@ function AudienceSection({ recipientMode, setRecipientMode, singleUser, setSingl
                 : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50"
             }`}
           >
-            <Icon size={15} />
+            {createElement(Icon, { size: 15 })}
             {label}
           </button>
         ))}
@@ -891,7 +1319,44 @@ function AudienceSection({ recipientMode, setRecipientMode, singleUser, setSingl
           </div>
           <div>
             <label className={labelCls}>Entity ID (WhatsApp)</label>
-            <input type="text" value={singleUser.entity_id} onChange={(e) => setSingleUser((p) => ({ ...p, entity_id: e.target.value }))} placeholder="coaching_center_1" className={inputCls} />
+            <input
+              type="text"
+              value={singleUser.entity_id}
+              onChange={(e) => setSingleUser((p) => ({ ...p, entity_id: e.target.value }))}
+              placeholder="coaching_center_1"
+              list="wa-entity-options"
+              autoComplete="off"
+              className={inputCls}
+            />
+            {waSessions.length > 0 && (
+              <datalist id="wa-entity-options">
+                {waSessions.map((session) => (
+                  <option key={session.entity_id} value={session.entity_id}>
+                    {session.phone_number || session.status}
+                  </option>
+                ))}
+              </datalist>
+            )}
+            {ownEntityId && (
+              <p className="mt-1 text-xs text-gray-400">
+                {singleUser.entity_id === ownEntityId ? (
+                  <>Your connected WhatsApp session — change it to send from another entity.</>
+                ) : (
+                  <>
+                    Yours is{" "}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSingleUser((p) => ({ ...p, entity_id: ownEntityId }))
+                      }
+                      className="font-medium text-indigo-600 hover:underline"
+                    >
+                      {ownEntityId}
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -905,14 +1370,19 @@ function AudienceSection({ recipientMode, setRecipientMode, singleUser, setSingl
           ) : audiences.length === 0 ? (
             <div className="rounded-xl border-2 border-dashed border-gray-200 p-6 text-center">
               <Users size={32} className="mx-auto text-gray-300 mb-2" />
-              <p className="text-sm text-gray-500 mb-3">No audiences yet. Create one in the Audiences page.</p>
-              <a href="/audiences" className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
-                Manage Audiences →
-              </a>
+              <p className="text-sm text-gray-500 mb-3">No audiences yet.</p>
+              <button type="button" onClick={() => onManageAudience(null)} className="text-sm font-medium text-indigo-600 hover:text-indigo-700">
+                Create audience
+              </button>
             </div>
           ) : (
             <div className="space-y-2">
-              <label className={labelCls}>Select Audience</label>
+              <div className="flex items-center justify-between">
+                <label className={labelCls}>Select Audience</label>
+                <button type="button" onClick={() => onManageAudience(null)} className="flex items-center gap-1 text-xs font-medium text-indigo-600">
+                  <Plus size={12} /> Create audience
+                </button>
+              </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {audiences.map((aud) => (
                   <button
@@ -935,6 +1405,27 @@ function AudienceSection({ recipientMode, setRecipientMode, singleUser, setSingl
                   </button>
                 ))}
               </div>
+              {selectedAudienceId && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onManageAudience(
+                        audiences.find((aud) => aud.id === selectedAudienceId),
+                      )
+                    }
+                    className="text-xs font-medium text-indigo-600 hover:underline"
+                  >
+                    Add, import, export, or edit members
+                  </button>
+                  <a
+                    href={`/audiences/${selectedAudienceId}`}
+                    className="text-xs font-medium text-gray-500 hover:underline"
+                  >
+                    Open audience page
+                  </a>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -945,7 +1436,18 @@ function AudienceSection({ recipientMode, setRecipientMode, singleUser, setSingl
 
 // ─── Channel Content Section ──────────────────────────────────────────────────
 
-function ChannelContentSection({ channel, content, onChange, dbTemplates, entityId }) {
+function ChannelContentSection({
+  channel,
+  content,
+  onChange,
+  dbTemplates,
+  notifType,
+  waTemplates,
+  templateAliases,
+  waLoading,
+  waError,
+  onReloadWaTemplates,
+}) {
   const [expanded, setExpanded] = useState(true);
   const cfg = CHANNELS.find((c) => c.id === channel);
   const colors = CHANNEL_COLORS[cfg?.color || "blue"];
@@ -973,7 +1475,16 @@ function ChannelContentSection({ channel, content, onChange, dbTemplates, entity
             <SmsSection content={content} onChange={onChange} templates={dbTemplates} />
           )}
           {channel === "whatsapp" && (
-            <WhatsAppSection content={content} onChange={onChange} entityId={entityId} />
+            <WhatsAppSection
+              content={content}
+              onChange={onChange}
+              notifType={notifType}
+              waTemplates={waTemplates}
+              templateAliases={templateAliases}
+              loading={waLoading}
+              error={waError}
+              onReload={onReloadWaTemplates}
+            />
           )}
           {(channel === "push" || channel === "in_app") && (
             <PushSection content={content} onChange={onChange} showTitle={true} templates={dbTemplates} />
@@ -1002,6 +1513,7 @@ export default function SendPage() {
   const [selectedAudienceId, setSelectedAudienceId] = useState("");
   const [audiences, setAudiences] = useState([]);
   const [loadingAudiences, setLoadingAudiences] = useState(false);
+  const [managedAudience, setManagedAudience] = useState(undefined);
 
   // Variables
   const [useSharedVars, setUseSharedVars] = useState(true);
@@ -1023,24 +1535,104 @@ export default function SendPage() {
 
   // DB templates (for existing template picker in email/sms/push)
   const [dbTemplates, setDbTemplates] = useState([]);
+  const [waTemplates, setWaTemplates] = useState([]);
+  const [templateAliases, setTemplateAliases] = useState([]);
+  const [waSessions, setWaSessions] = useState([]);
+  const [waLoading, setWaLoading] = useState(false);
+  const [waError, setWaError] = useState("");
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
 
-  // Load audiences
-  useEffect(() => {
-    let cancelled = false;
+  const loadAudiences = useCallback(async () => {
     setLoadingAudiences(true);
-    api.getAudiences()
-      .then((d) => { if (!cancelled) setAudiences(d.data || []); })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoadingAudiences(false); });
-    return () => { cancelled = true; };
+    try {
+      const response = await api.getAudiences();
+      setAudiences(response.data || []);
+    } finally {
+      setLoadingAudiences(false);
+    }
   }, []);
+
+  // Load only audience metadata; members are fetched when managed.
+  useEffect(() => {
+    loadAudiences().catch(() => {});
+  }, [loadAudiences]);
 
   // Load DB templates
   useEffect(() => {
     api.getTemplates({}).then((d) => setDbTemplates(d.data || [])).catch(() => {});
   }, []);
+
+  // Default the Entity ID to the app's own connected WhatsApp session. The
+  // field stays editable — this only prefills an empty value.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSessions() {
+      try {
+        const response = await api.listWhatsAppSessions("active");
+        if (cancelled) return;
+        const list = response.sessions || [];
+        setWaSessions(list);
+        const own = list[0];
+        if (!own) return;
+        setSingleUser((prev) =>
+          prev.entity_id
+            ? prev
+            : {
+                ...prev,
+                entity_id: own.entity_id,
+                parent_entity_id:
+                  prev.parent_entity_id || own.parent_entity_id || "",
+              },
+        );
+      } catch {
+        if (!cancelled) setWaSessions([]);
+      }
+    }
+    loadSessions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load WhatsApp templates synced from Meta (cache only — Meta itself is slow)
+  const loadWaTemplates = useCallback(async () => {
+    setWaLoading(true);
+    setWaError("");
+    try {
+      const entityId = singleUser.entity_id.trim() || undefined;
+      const [d, aliasResponse] = await Promise.all([
+        api.getWhatsAppTemplates({
+          entityId,
+          source: "cache",
+          status: "ALL",
+        }),
+        api.getTemplateAliases({ entityId }),
+      ]);
+      setWaTemplates(d.data || []);
+      setTemplateAliases(aliasResponse.data || []);
+    } catch (err) {
+      setWaError(err.message);
+      setWaTemplates([]);
+    } finally {
+      setWaLoading(false);
+    }
+  }, [singleUser.entity_id]);
+
+  useEffect(() => {
+    loadWaTemplates();
+  }, [loadWaTemplates]);
+
+  // Aliases that apply to the type currently typed, for any channel.
+  const activeAliases = useMemo(
+    () =>
+      templateAliases.filter(
+        (alias) =>
+          normalizeSearchText(alias.notification_type) ===
+          normalizeSearchText(notifType),
+      ),
+    [templateAliases, notifType],
+  );
 
   function toggleChannel(ch) {
     setSelectedChannels((prev) =>
@@ -1052,10 +1644,51 @@ export default function SendPage() {
     setChannelContents((prev) => ({ ...prev, [ch]: { ...content, channel: ch } }));
   }
 
-  // Build variables object for a channel
-  function buildVarsForChannel(ch) {
-    if (useSharedVars) return { ...sharedVars };
-    return { ...(perChannelVars[ch] || {}) };
+  /**
+   * /notify takes a single variables object, so per-channel values are merged.
+   * WhatsApp placeholders are positional ({{1}}, {{2}}) and go out as the
+   * `whatsapp` array, keeping them clear of the other channels' named values.
+   */
+  function buildVariablesPayload() {
+    const named = {};
+    const positional = {};
+
+    function absorb(vars) {
+      for (const [key, value] of Object.entries(vars || {})) {
+        if (/^\d+$/.test(key)) positional[key] = value;
+        else named[key] = value;
+      }
+    }
+
+    if (useSharedVars) absorb(sharedVars);
+    else for (const ch of selectedChannels) absorb(perChannelVars[ch]);
+
+    const indexes = Object.keys(positional).map(Number);
+    if (indexes.length > 0) {
+      const highest = Math.max(...indexes);
+      named.whatsapp = Array.from({ length: highest }, (_, i) =>
+        String(positional[String(i + 1)] ?? ""),
+      );
+    }
+
+    const waLanguage = channelContents.whatsapp?.templateLanguage;
+    if (selectedChannels.includes("whatsapp") && waLanguage) {
+      named.whatsapp_language = waLanguage;
+    }
+
+    return named;
+  }
+
+  /** Meta rejects a template send outright when a {{n}} value is blank. */
+  function missingWhatsAppParams() {
+    const waContent = channelContents.whatsapp;
+    if (!selectedChannels.includes("whatsapp") || !waContent?.templateName) {
+      return [];
+    }
+    const values = buildVariablesPayload().whatsapp || [];
+    return extractVars(variableText(waContent))
+      .filter((key) => /^\d+$/.test(key))
+      .filter((key) => !String(values[Number(key) - 1] ?? "").trim());
   }
 
   async function handleSend(e) {
@@ -1077,6 +1710,15 @@ export default function SendPage() {
       toast.error("Select an audience");
       return;
     }
+    const missingWaParams = missingWhatsAppParams();
+    if (missingWaParams.length > 0) {
+      toast.error(
+        `WhatsApp template needs a value for ${missingWaParams
+          .map((key) => `{{${key}}}`)
+          .join(", ")}`,
+      );
+      return;
+    }
 
     setSending(true);
     setResult(null);
@@ -1096,50 +1738,17 @@ export default function SendPage() {
 
   async function handleImmediateSend() {
     if (recipientMode === "audience") {
-      // Fetch audience members and send to each
-      const audData = await api.getAudience(selectedAudienceId);
-      const members = audData.data?.members || [];
-      if (members.length === 0) {
-        toast.error("This audience has no members");
-        return;
-      }
-
-      let successCount = 0;
-      let failCount = 0;
-
-      for (const member of members) {
-        const userObj = {
-          ...(member.email ? { email: member.email } : {}),
-          ...(member.phone ? { phone: member.phone } : {}),
-          ...(member.fcm_token ? { fcm_token: member.fcm_token } : {}),
-          ...(member.onesignal_player_id ? { onesignal_player_id: member.onesignal_player_id } : {}),
-        };
-        const userId = member.user_id || member.email || member.phone || `member_${Date.now()}`;
-
-        // Merge member fields as potential vars
-        const baseVars = buildVarsForChannel(selectedChannels[0]);
-
-        const payload = {
-          user_id: userId,
-          type: notifType.trim(),
-          channels: selectedChannels,
-          variables: { ...baseVars, ...(member.name ? { name: member.name } : {}) },
-          user: userObj,
-          entity_id: singleUser.entity_id || undefined,
-          parent_entity_id: singleUser.parent_entity_id || undefined,
-        };
-
-        try {
-          await api.sendNotification(payload);
-          successCount++;
-        } catch {
-          failCount++;
-        }
-      }
-
-      const r = { broadcast: true, total: members.length, success: successCount, failed: failCount };
-      setResult(r);
-      toast.success(`Broadcast: ${successCount}/${members.length} sent`);
+      const response = await api.notifyAudience(selectedAudienceId, {
+        type: notifType.trim(),
+        channels: selectedChannels,
+        variables: buildVariablesPayload(),
+        entity_id: singleUser.entity_id.trim() || undefined,
+        parent_entity_id: singleUser.parent_entity_id.trim() || undefined,
+      });
+      setResult(response);
+      toast.success(
+        `Broadcast queued for ${response.queued} member${response.queued === 1 ? "" : "s"}${response.skipped ? `; ${response.skipped} skipped` : ""}`,
+      );
     } else {
       // Single user
       const userObj = {};
@@ -1148,7 +1757,7 @@ export default function SendPage() {
       if (singleUser.fcm_token.trim()) userObj.fcm_token = singleUser.fcm_token.trim();
       if (singleUser.onesignal_player_id.trim()) userObj.onesignal_player_id = singleUser.onesignal_player_id.trim();
 
-      const vars = buildVarsForChannel(selectedChannels[0]);
+      const vars = buildVariablesPayload();
 
       const payload = {
         user_id: singleUser.user_id.trim(),
@@ -1184,7 +1793,7 @@ export default function SendPage() {
       audiencePayload = { members: [userObj] };
     }
 
-    const vars = buildVarsForChannel(selectedChannels[0]);
+    const vars = buildVariablesPayload();
 
     const schedulePayload = {
       type: scheduleOpts.type,
@@ -1233,15 +1842,38 @@ export default function SendPage() {
             <label className={labelCls}>
               Notification Type <span className="text-red-500">*</span>
             </label>
-            <input
-              type="text"
+            <TypeSearchField
               value={notifType}
-              onChange={(e) => setNotifType(e.target.value)}
-              placeholder="e.g. fee_due, class_reminder"
-              className={inputCls}
+              onChange={setNotifType}
+              dbTemplates={dbTemplates}
+              waTemplates={waTemplates}
+              aliases={templateAliases}
+              loading={waLoading}
             />
+            {activeAliases.length > 0 ? (
+              <div className="mt-2 space-y-1 rounded-lg border border-indigo-100 bg-indigo-50/70 px-3 py-2">
+                {activeAliases.map((alias) => (
+                  <p
+                    key={`${alias.channel}-${alias.resolves_to}`}
+                    className="flex flex-wrap items-center gap-1.5 text-xs text-indigo-800"
+                  >
+                    <Link2 size={11} className="shrink-0" />
+                    <span className="font-medium">
+                      {channelLabel(alias.channel)}
+                    </span>
+                    sends
+                    <code className="rounded bg-white px-1.5 py-0.5 font-semibold">
+                      {alias.resolves_to}
+                    </code>
+                    <span className="text-indigo-500">
+                      instead of {alias.notification_type}
+                    </span>
+                  </p>
+                ))}
+              </div>
+            ) : null}
             <p className="mt-1 text-xs text-gray-400">
-              Matches the <code className="rounded bg-gray-100 px-1">type</code> field in your templates.
+              Matches the <code className="rounded bg-gray-100 px-1">type</code> field in your templates and the WhatsApp template name synced from Meta.
             </p>
           </div>
         </div>
@@ -1261,6 +1893,8 @@ export default function SendPage() {
             setSelectedAudienceId={setSelectedAudienceId}
             audiences={audiences}
             loadingAudiences={loadingAudiences}
+            waSessions={waSessions}
+            onManageAudience={setManagedAudience}
           />
         </div>
 
@@ -1283,7 +1917,7 @@ export default function SendPage() {
                     active ? colors.pill : colors.off
                   }`}
                 >
-                  <Icon size={13} />
+                  {createElement(Icon, { size: 13 })}
                   {label}
                 </button>
               );
@@ -1305,7 +1939,12 @@ export default function SendPage() {
                 content={channelContents[ch] || {}}
                 onChange={(c) => updateChannelContent(ch, c)}
                 dbTemplates={dbTemplates}
-                entityId={singleUser.entity_id}
+                notifType={notifType}
+                waTemplates={waTemplates}
+                templateAliases={templateAliases}
+                waLoading={waLoading}
+                waError={waError}
+                onReloadWaTemplates={loadWaTemplates}
               />
             ))}
           </div>
@@ -1349,6 +1988,14 @@ export default function SendPage() {
         </button>
       </form>
 
+      <AudienceManager
+        isOpen={managedAudience !== undefined}
+        audience={managedAudience || null}
+        onClose={() => setManagedAudience(undefined)}
+        onSaved={loadAudiences}
+        onSelect={(audience) => setSelectedAudienceId(audience.id)}
+      />
+
       {/* ─ Result ─ */}
       {result && (
         <div className="rounded-xl border border-green-200 bg-green-50 p-5 space-y-2">
@@ -1362,12 +2009,11 @@ export default function SendPage() {
           ) : result.broadcast ? (
             <>
               <p className="text-sm font-semibold text-green-800 flex items-center gap-2">
-                <Users size={14} /> Broadcast completed
+                <Users size={14} /> Broadcast queued
               </p>
               <div className="flex gap-4 text-sm">
-                <span className="text-green-700">✓ {result.success} sent</span>
-                {result.failed > 0 && <span className="text-red-600">✗ {result.failed} failed</span>}
-                <span className="text-green-500">of {result.total} total</span>
+                <span className="text-green-700">{result.queued} queued</span>
+                {result.skipped > 0 && <span className="text-amber-600">{result.skipped} skipped</span>}
               </div>
             </>
           ) : (

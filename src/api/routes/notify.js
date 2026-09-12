@@ -16,6 +16,11 @@ const {
 } = require("../../utils/channel");
 const config = require("../../config");
 const { getAppProvider } = require("../../providers/per-app-factory");
+const {
+  findCachedSendableTemplate,
+  buildWhatsAppSendTemplate,
+} = require("../../utils/whatsapp-template");
+const { resolveTemplateAlias } = require("../../utils/template-alias");
 
 const router = Router();
 
@@ -66,6 +71,117 @@ function pickBestTemplate(templates, variables) {
   return best;
 }
 
+async function prepareTemplates({
+  appId,
+  channels,
+  entityId,
+  parentEntityId,
+  type,
+  variables,
+}) {
+  const sql = getDb();
+  const aliasEntries = await Promise.all(
+    channels.map(async (channel) => {
+      const alias = await resolveTemplateAlias({
+        appId,
+        channel,
+        entityId,
+        parentEntityId,
+        notificationType: type,
+      });
+      return [channel, alias.templateName];
+    }),
+  );
+  const resolvedTypeByChannel = Object.fromEntries(aliasEntries);
+  const dbChannels = channels.filter((channel) => channel !== "whatsapp");
+  const templateCandidates = [
+    ...new Set(
+      dbChannels.flatMap((channel) => getTemplateChannelCandidates(channel)),
+    ),
+  ];
+
+  let templates = [];
+  if (templateCandidates.length > 0) {
+    const resolvedDbTypes = [
+      ...new Set(dbChannels.map((channel) => resolvedTypeByChannel[channel])),
+    ];
+    templates = await sql`
+      SELECT type, channel, title, body, body_format, cta_text, cta_url,
+             condition_key, condition_value, variant_key
+      FROM templates
+      WHERE app_id = ${appId}
+        AND type = ANY(${resolvedDbTypes})
+        AND channel = ANY(${templateCandidates})
+        AND is_active = true
+      ORDER BY channel ASC, updated_at DESC
+    `;
+  }
+
+  const templateRowsByChannel = {};
+  for (const template of templates) {
+    const channel = normalizePublicChannel(template.channel);
+    if (!channel || template.type !== resolvedTypeByChannel[channel]) continue;
+    if (!templateRowsByChannel[channel]) templateRowsByChannel[channel] = [];
+    templateRowsByChannel[channel].push(template);
+  }
+
+  const whatsappTemplateName = resolvedTypeByChannel.whatsapp || type;
+  let whatsappCache = null;
+  if (channels.includes("whatsapp")) {
+    const language = variables?.language || variables?.whatsapp_language || null;
+    whatsappCache = await findCachedSendableTemplate({
+      appId,
+      entityId,
+      parentEntityId,
+      name: whatsappTemplateName,
+      language,
+    });
+  }
+
+  const templateMap = {};
+  for (const channel of channels) {
+    if (channel === "whatsapp") {
+      templateMap[channel] = buildWhatsAppSendTemplate({
+        cacheRow: whatsappCache,
+        type: whatsappTemplateName,
+        variables,
+        fallback: {
+          title: variables?.title || type.replace(/_/g, " "),
+          body:
+            variables?.body || variables?.message || `Notification: ${type}`,
+          bodyFormat: "text",
+          ctaText: variables?.cta_text || null,
+          actionUrl: variables?.cta_url || null,
+        },
+      });
+      continue;
+    }
+
+    const selected = pickBestTemplate(
+      templateRowsByChannel[channel] || [],
+      variables,
+    );
+    templateMap[channel] = selected
+      ? {
+          title: renderTemplate(selected.title, variables),
+          body: renderTemplate(selected.body, variables),
+          bodyFormat: selected.body_format || "text",
+          ctaText: renderTemplate(selected.cta_text, variables),
+          actionUrl: renderTemplate(selected.cta_url, variables),
+        }
+      : {
+          title: variables?.title || type.replace(/_/g, " "),
+          body:
+            variables?.body || variables?.message || `Notification: ${type}`,
+          bodyFormat: "text",
+          ctaText: variables?.cta_text || null,
+          actionUrl: variables?.cta_url || null,
+        };
+  }
+
+  return { templateMap, resolvedChannels: channels };
+}
+
 /**
  * POST /notify
  *
@@ -92,7 +208,7 @@ function pickBestTemplate(templates, variables) {
  *   data:          { fee_id: "fee_456" }   — extra payload (optional)
  * }
  */
-router.post("/", async (req, res) => {
+async function notifyHandler(req, res) {
   try {
     const {
       user_id,
@@ -200,85 +316,31 @@ router.post("/", async (req, res) => {
 
     const sql = getDb();
 
-    // ─── 2. Fetch templates for each channel ───
-    const templateCandidates = [
-      ...new Set(
-        effectiveChannels.flatMap((channel) =>
-          getTemplateChannelCandidates(channel),
-        ),
-      ),
-    ];
-
-    console.log(
-      `[notify] Template lookup — app_id=${appId}, type=${type}, candidates=[${templateCandidates.join(", ")}]`,
-    );
-
-    const templates = await sql`
-      SELECT
-        channel,
-        title,
-        body,
-        body_format,
-        cta_text,
-        cta_url,
-        condition_key,
-        condition_value,
-        variant_key
-      FROM templates
-      WHERE app_id = ${appId}
-        AND type = ${type}
-        AND channel = ANY(${templateCandidates})
-        AND is_active = true
-      ORDER BY channel ASC, updated_at DESC
-    `;
-
-    console.log(
-      `[notify] Found ${templates.length} template(s)${templates.length > 0 ? `: [${templates.map((t) => `${t.channel}/${t.variant_key || "default"}: "${t.title}"`).join(", ")}]` : ""}`,
-    );
-
-    const templateRowsByChannel = {};
-    for (const tpl of templates) {
-      const normalizedTemplateChannel = normalizePublicChannel(tpl.channel);
-      if (!normalizedTemplateChannel) {
-        continue;
-      }
-      if (!templateRowsByChannel[normalizedTemplateChannel]) {
-        templateRowsByChannel[normalizedTemplateChannel] = [];
-      }
-      templateRowsByChannel[normalizedTemplateChannel].push(tpl);
+    // Audience broadcasts pass a request-scoped cache. Templates are prepared
+    // once per entity/language combination while the public /notify contract
+    // and response stay exactly the same.
+    const preparationKey = JSON.stringify({
+      appId,
+      effectiveChannels,
+      resolvedEntityId,
+      resolvedParentEntityId,
+      type,
+      variables,
+    });
+    let prepared = req.notificationPreparation?.get(preparationKey);
+    if (!prepared) {
+      prepared = prepareTemplates({
+        appId,
+        channels: effectiveChannels,
+        entityId: resolvedEntityId,
+        parentEntityId: resolvedParentEntityId,
+        type,
+        variables,
+      });
+      req.notificationPreparation?.set(preparationKey, prepared);
     }
-
-    // Build a map: channel → best rendered template (condition-aware)
-    const templateMap = {};
-    const resolvedChannels = [];
-    for (const ch of effectiveChannels) {
-      const channelTemplates = templateRowsByChannel[ch] || [];
-      const selectedTemplate = pickBestTemplate(channelTemplates, variables);
-
-      if (selectedTemplate) {
-        templateMap[ch] = {
-          title: renderTemplate(selectedTemplate.title, variables),
-          body: renderTemplate(selectedTemplate.body, variables),
-          bodyFormat: selectedTemplate.body_format || "text",
-          ctaText: renderTemplate(selectedTemplate.cta_text, variables),
-          actionUrl: renderTemplate(selectedTemplate.cta_url, variables),
-        };
-      } else {
-        console.warn(
-          `[notify] ⚠ No template found for channel "${ch}" — using fallback`,
-        );
-        // Use a generic template
-        templateMap[ch] = {
-          title: variables?.title || type.replace(/_/g, " "),
-          body:
-            variables?.body || variables?.message || `Notification: ${type}`,
-          bodyFormat: "text",
-          ctaText: variables?.cta_text || null,
-          actionUrl: variables?.cta_url || null,
-        };
-      }
-      resolvedChannels.push(ch);
-    }
+    prepared = await prepared;
+    const { templateMap, resolvedChannels } = prepared;
 
     // ─── 3. Save notification to DB ───
     // Use the first available template for the master record
@@ -305,6 +367,9 @@ router.post("/", async (req, res) => {
       templatesByChannel[internalChannel] = {
         ...templateMap[channel],
         actionUrl: templateMap[channel]?.actionUrl || action_url || null,
+        templateName: templateMap[channel]?.templateName || null,
+        language: templateMap[channel]?.language || null,
+        parameters: templateMap[channel]?.parameters || null,
       };
     }
 
@@ -338,6 +403,9 @@ router.post("/", async (req, res) => {
     console.error("[notify] Error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
-});
+}
+
+router.post("/", notifyHandler);
 
 module.exports = router;
+module.exports.notifyHandler = notifyHandler;

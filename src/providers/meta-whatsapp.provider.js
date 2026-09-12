@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { INotificationProvider } = require("./interface");
+const { META_GRAPH_BASE, META_API_VERSION } = require("../config/meta-graph");
 
 /**
  * Meta WhatsApp Cloud API Provider
@@ -15,8 +16,8 @@ const { INotificationProvider } = require("./interface");
 class MetaWhatsAppProvider extends INotificationProvider {
   constructor() {
     super("meta-whatsapp");
-    this.baseUrl = "https://graph.facebook.com";
-    this.apiVersion = "v19.0";
+    this.baseUrl = META_GRAPH_BASE;
+    this.apiVersion = META_API_VERSION;
   }
 
   /**
@@ -62,6 +63,23 @@ class MetaWhatsAppProvider extends INotificationProvider {
    * @param {string} body — message text
    * @returns {object} — Meta API request body
    */
+  _buildTemplatePayload(to, { templateName, language, parameters }) {
+    const template = {
+      name: templateName,
+      language: { code: language },
+    };
+    if (Array.isArray(parameters) && parameters.length > 0) {
+      template.components = parameters;
+    }
+    return {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "template",
+      template,
+    };
+  }
+
   _buildMessagePayload(to, body) {
     return {
       messaging_product: "whatsapp",
@@ -87,7 +105,16 @@ class MetaWhatsAppProvider extends INotificationProvider {
    * @returns {Promise<{success:boolean, providerMessageId?:string, error?:string}>}
    */
   async sendWhatsApp(payload) {
-    const { metaApiKey, metaPhoneNumberId, user, body, actionUrl } = payload;
+    const {
+      metaApiKey,
+      metaPhoneNumberId,
+      user,
+      body,
+      actionUrl,
+      templateName,
+      language,
+      parameters,
+    } = payload;
 
     // Validate required Meta credentials
     if (!metaApiKey) {
@@ -122,13 +149,19 @@ class MetaWhatsAppProvider extends INotificationProvider {
       };
     }
 
-    // Build the full message text
-    const messageText = actionUrl ? `${body}\n\n🔗 ${actionUrl}` : body;
-
-    // Build request
     const endpoint = this._buildEndpoint(metaPhoneNumberId);
     const headers = this._buildHeaders(metaApiKey);
-    const requestBody = this._buildMessagePayload(formattedPhone, messageText);
+    const useTemplate = Boolean(templateName && language);
+    const requestBody = useTemplate
+      ? this._buildTemplatePayload(formattedPhone, {
+          templateName,
+          language,
+          parameters,
+        })
+      : this._buildMessagePayload(
+          formattedPhone,
+          actionUrl ? `${body}\n\n🔗 ${actionUrl}` : body,
+        );
 
     try {
       const response = await axios.post(endpoint, requestBody, {
@@ -181,6 +214,8 @@ class MetaWhatsAppProvider extends INotificationProvider {
         return {
           success: false,
           error: `META_BAD_REQUEST: ${errorMessage}`,
+          errorCode,
+          errorMessage,
         };
       }
 
@@ -212,6 +247,8 @@ class MetaWhatsAppProvider extends INotificationProvider {
       return {
         success: false,
         error: `META_ERROR: ${errorMessage || "Unknown error"}`,
+        errorCode,
+        errorMessage,
       };
     }
   }

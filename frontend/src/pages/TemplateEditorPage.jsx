@@ -9,8 +9,13 @@ import {
   getTemplateChannelConfig,
 } from "../config/templateChannels";
 import TemplatePreview from "../components/template/TemplatePreview";
+import WhatsAppTemplateEditor from "../components/template/WhatsAppTemplateEditor";
+import { parseWhatsAppEditorJson } from "../utils/whatsappTemplateEditor";
 
 const DEFAULT_CHANNEL = TEMPLATE_CHANNELS[0]?.id || "push";
+const WHATSAPP_CHANNEL_ID =
+  TEMPLATE_CHANNELS.find((channel) => channel.id === "whatsapp")?.id ||
+  "whatsapp";
 
 const TEMPLATE_FORMAT_LABELS = TEMPLATE_FORMATS.reduce((acc, format) => {
   acc[format.id] = format.label;
@@ -30,6 +35,13 @@ function buildEmptyForm(channel = DEFAULT_CHANNEL) {
     condition_key: "",
     condition_value: "",
     is_active: true,
+    language: "en_US",
+    category: "UTILITY",
+    headerText: "",
+    footerText: "",
+    buttons: [],
+    jsonText: JSON.stringify({ components: [{ type: "BODY", text: "" }] }, null, 2),
+    entity_id: "",
   };
 }
 
@@ -46,18 +58,57 @@ function normalizeFormFromTemplate(template) {
     condition_key: template.condition_key || "",
     condition_value: template.condition_value || "",
     is_active: template.is_active !== false,
+    language: template.language || "en_US",
+    category: template.category || "UTILITY",
+    headerText: template.header_text || "",
+    footerText: template.footer_text || "",
+    buttons:
+      template.components?.find((c) => c.type === "BUTTONS")?.buttons || [],
+    jsonText: JSON.stringify(
+      { components: template.components || [] },
+      null,
+      2,
+    ),
+    entity_id: template.entity_id || "",
   };
 }
 
 export default function TemplateEditorPage() {
   const navigate = useNavigate();
-  const { templateId } = useParams();
-  const isEditing = Boolean(templateId);
+  const { templateId, whatsappName } = useParams();
+  const isWhatsAppEdit = Boolean(whatsappName);
+  const isEditing = Boolean(templateId) || isWhatsAppEdit;
 
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("edit");
-  const [form, setForm] = useState(() => buildEmptyForm());
+  const [form, setForm] = useState(() =>
+    buildEmptyForm(isWhatsAppEdit ? WHATSAPP_CHANNEL_ID : DEFAULT_CHANNEL),
+  );
+  const [sessions, setSessions] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSessions() {
+      try {
+        const response = await api.listWhatsAppSessions("active");
+        if (!cancelled) {
+          const list = response.sessions || response.data || [];
+          setSessions(list);
+          setForm((prev) => {
+            if (prev.entity_id || list.length !== 1) return prev;
+            return { ...prev, entity_id: list[0].entity_id };
+          });
+        }
+      } catch {
+        if (!cancelled) setSessions([]);
+      }
+    }
+    loadSessions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -66,9 +117,20 @@ export default function TemplateEditorPage() {
     async function loadTemplate() {
       setLoading(true);
       try {
-        const response = await api.getTemplate(templateId);
+        const response = isWhatsAppEdit
+          ? await api.getWhatsAppTemplate(whatsappName, { source: "cache" })
+          : await api.getTemplate(templateId);
         if (!cancelled) {
-          setForm(normalizeFormFromTemplate(response.data));
+          setForm(
+            isWhatsAppEdit
+              ? normalizeFormFromTemplate({
+                  ...response.data,
+                  channel: WHATSAPP_CHANNEL_ID,
+                  type: response.data.name,
+                  body: response.data.body_text,
+                })
+              : normalizeFormFromTemplate(response.data),
+          );
         }
       } catch (error) {
         toast.error(`Failed to load template: ${error.message}`);
@@ -84,7 +146,7 @@ export default function TemplateEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, [isEditing, navigate, templateId]);
+  }, [isEditing, isWhatsAppEdit, navigate, templateId, whatsappName]);
 
   const channelConfig = getTemplateChannelConfig(form.channel);
   const showFormatSelect = (channelConfig.formats || []).length > 1;
@@ -106,8 +168,70 @@ export default function TemplateEditorPage() {
     }));
   }
 
+  const isWhatsApp = form.channel === WHATSAPP_CHANNEL_ID;
+
   async function handleSave(event) {
     event.preventDefault();
+
+    if (isWhatsApp) {
+      if (isEditing) {
+        toast.error(
+          "Approved Meta templates cannot be edited here. Change them in Meta Manager, then sync.",
+        );
+        return;
+      }
+      if (!form.type.trim() || !form.language || !form.category) {
+        toast.error("Name, language, and category are required");
+        return;
+      }
+      if (sessions.length > 1 && !form.entity_id) {
+        toast.error("Select a WhatsApp session");
+        return;
+      }
+
+      let components;
+      if (form.body_format === "json") {
+        try {
+          const parsed = parseWhatsAppEditorJson(form.jsonText);
+          components = parsed.components;
+        } catch (error) {
+          toast.error(error.message || "Invalid JSON");
+          return;
+        }
+      } else if (!form.body.trim()) {
+        toast.error("Body is required");
+        return;
+      }
+
+      setSaving(true);
+      try {
+        const response = await api.createWhatsAppTemplate({
+          entity_id: form.entity_id || undefined,
+          name: form.type.trim(),
+          language: form.language,
+          category: form.category,
+          ...(form.body_format === "json"
+            ? { components }
+            : {
+                body: form.body,
+                header_text: form.headerText,
+                footer_text: form.footerText,
+                buttons: form.buttons,
+              }),
+        });
+        if (response.cached === false) {
+          toast.success("Created on Meta. Cache missed — tap Sync on Templates.");
+        } else {
+          toast.success("WhatsApp template submitted to Meta");
+        }
+        navigate("/templates");
+      } catch (error) {
+        toast.error(error.message);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
 
     if (!form.type.trim() || !form.body.trim()) {
       toast.error("Type and body are required");
@@ -209,6 +333,65 @@ export default function TemplateEditorPage() {
 
       <form onSubmit={handleSave} className="space-y-4">
         {activeTab === "edit" ? (
+          isWhatsApp ? (
+            <>
+              <section className="rounded-xl border border-gray-200 bg-white p-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Channel
+                    </label>
+                    <select
+                      value={form.channel}
+                      onChange={(e) => handleChannelChange(e.target.value)}
+                      disabled={isEditing}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-gray-50"
+                    >
+                      {TEMPLATE_CHANNELS.map((channel) => (
+                        <option key={channel.id} value={channel.id}>
+                          {channel.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {sessions.length > 0 ? (
+                    <div>
+                      <label className="mb-1 block text-sm font-medium text-gray-700">
+                        WhatsApp session
+                      </label>
+                      <select
+                        value={form.entity_id}
+                        onChange={(e) =>
+                          updateFormField("entity_id", e.target.value)
+                        }
+                        disabled={isEditing}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-gray-50"
+                      >
+                        <option value="">
+                          {sessions.length === 1 ? "Default session" : "Select session"}
+                        </option>
+                        {sessions.map((session) => (
+                          <option key={session.entity_id} value={session.entity_id}>
+                            {session.entity_id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+                </div>
+                {isEditing ? (
+                  <p className="mt-3 text-xs text-amber-600">
+                    Synced Meta templates are read-only here. Edit in Meta Manager, then sync.
+                  </p>
+                ) : null}
+              </section>
+              <WhatsAppTemplateEditor
+                form={form}
+                onChange={setForm}
+                isEditing={isEditing}
+              />
+            </>
+          ) : (
           <>
             <section className="rounded-xl border border-gray-200 bg-white p-5">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -383,14 +566,24 @@ export default function TemplateEditorPage() {
               </label>
             </section>
           </>
+          )
         ) : (
           <TemplatePreview
             channel={form.channel}
-            title={form.title}
-            body={form.body}
+            title={isWhatsApp ? form.headerText : form.title}
+            body={
+              isWhatsApp && form.body_format === "json"
+                ? form.jsonText
+                : isWhatsApp
+                  ? form.body
+                  : form.body
+            }
             bodyFormat={form.body_format}
             ctaText={form.cta_text}
             actionUrl={form.cta_url}
+            headerText={form.headerText}
+            footerText={form.footerText}
+            buttons={form.buttons}
           />
         )}
 
@@ -404,11 +597,17 @@ export default function TemplateEditorPage() {
           </button>
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || (isWhatsApp && isEditing)}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             <Save size={14} />
-            {saving ? "Saving..." : isEditing ? "Update Template" : "Create Template"}
+            {saving
+              ? "Saving..."
+              : isWhatsApp && isEditing
+                ? "Read only"
+                : isEditing
+                  ? "Update Template"
+                  : "Create Template"}
           </button>
         </div>
       </form>

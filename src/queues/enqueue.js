@@ -71,6 +71,9 @@ async function enqueueNotification(opts) {
       data,
       entityId,
       parentEntityId,
+      templateName: template.templateName || null,
+      language: template.language || null,
+      parameters: template.parameters || null,
     };
 
     await queue.add(

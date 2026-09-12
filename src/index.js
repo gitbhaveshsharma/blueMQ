@@ -31,6 +31,7 @@ const settingsRoutes = require("./api/routes/settings");
 const schedulesRoutes = require("./api/routes/schedules");
 const audiencesRoutes = require("./api/routes/audiences");
 const whatsappTemplatesRoutes = require("./api/routes/whatsapp-templates");
+const templateAliasesRoutes = require("./api/routes/template-aliases");
 const { attachWebSocketServer } = require("./ws");
 
 function createExpressApp() {
@@ -60,6 +61,7 @@ function registerRoutes(app) {
   app.use("/schedules", authMiddleware, schedulesRoutes);
   app.use("/audiences", authMiddleware, audiencesRoutes);
   app.use("/whatsapp-templates", authMiddleware, whatsappTemplatesRoutes);
+  app.use("/template-aliases", authMiddleware, templateAliasesRoutes);
 }
 
 function registerHttpHandlers(app) {

@@ -12,6 +12,11 @@ import {
   MoreVertical,
   CalendarDays,
   X,
+  CloudDownload,
+  Settings,
+  Link2,
+  ArrowRight,
+  Save,
 } from "lucide-react";
 import { api } from "../services/api";
 import {
@@ -47,6 +52,9 @@ function todayStr() {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getRuleLabel(template) {
+  if (template.source === "meta") {
+    return `${template.language || "—"} · ${template.category || "Meta"}`;
+  }
   if (template.condition_key && template.condition_value) {
     return `${template.condition_key} = ${template.condition_value}`;
   }
@@ -175,7 +183,7 @@ function DateRangeFilter({ value, onChange }) {
 
 // ─── ActionsMenu ──────────────────────────────────────────────────────────────
 
-function ActionsMenu({ onEdit, onDelete }) {
+function ActionsMenu({ onEdit, onDelete, onSettings }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -208,6 +216,19 @@ function ActionsMenu({ onEdit, onDelete }) {
             <Pencil size={13} className="text-gray-400" />
             Edit
           </button>
+          {onSettings ? (
+            <button
+              onClick={() => {
+                onSettings();
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <Settings size={13} className="text-gray-400" />
+              Alias settings
+            </button>
+          ) : null}
+          {onDelete ? (
           <button
             onClick={() => {
               onDelete();
@@ -218,15 +239,288 @@ function ActionsMenu({ onEdit, onDelete }) {
             <Trash2 size={13} className="text-red-400" />
             Delete
           </button>
+          ) : null}
         </div>
       )}
     </div>
   );
 }
 
+// ─── WhatsApp Template Alias Sheet ───────────────────────────────────────────
+
+function TemplateAliasSheet({
+  entityId,
+  channel,
+  initialType,
+  aliases,
+  channelTemplates,
+  onSave,
+  onDelete,
+  onClose,
+}) {
+  const channelAliases = useMemo(
+    () => aliases.filter((alias) => alias.channel === channel),
+    [aliases, channel],
+  );
+  const existing = channelAliases.find(
+    (alias) => alias.notification_type === initialType,
+  );
+  const [editingId, setEditingId] = useState(existing?.id || null);
+  const [notificationType, setNotificationType] = useState(
+    existing?.notification_type || initialType || "",
+  );
+  const [resolvesTo, setResolvesTo] = useState(existing?.resolves_to || "");
+  const [busy, setBusy] = useState(false);
+
+  const templateNames = useMemo(
+    () =>
+      [
+        ...new Set(
+          channelTemplates.map(
+            (template) => template.name || template.type,
+          ),
+        ),
+      ]
+        .filter(Boolean)
+        .sort(),
+    [channelTemplates],
+  );
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  function resetForm(type = "") {
+    setEditingId(null);
+    setNotificationType(type);
+    setResolvesTo("");
+  }
+
+  function editAlias(alias) {
+    setEditingId(alias.id);
+    setNotificationType(alias.notification_type);
+    setResolvesTo(alias.resolves_to);
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await onSave({
+        id: editingId,
+        channel,
+        entity_id: entityId,
+        notification_type: notificationType.trim(),
+        resolves_to: resolvesTo,
+      });
+      resetForm();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(alias) {
+    if (!confirm(`Remove alias "${alias.notification_type}"?`)) return;
+    setBusy(true);
+    try {
+      await onDelete(alias);
+      if (editingId === alias.id) resetForm();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100]">
+      <button
+        type="button"
+        aria-label="Close template alias settings"
+        onClick={onClose}
+        className="absolute inset-0 bg-gray-950/30 backdrop-blur-[1px]"
+      />
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-lg flex-col bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-gray-200 px-6 py-5">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-100 text-green-700">
+                <Link2 size={16} />
+              </span>
+              <h3 className="text-lg font-semibold text-gray-900">
+                Template Aliases
+              </h3>
+            </div>
+            <p className="mt-2 text-sm text-gray-500">
+              Route an incoming notification type to another{" "}
+              <span className="font-medium">{channel}</span> template
+              {channel === "whatsapp" ? (
+                <>
+                  {" "}for <span className="font-medium">{entityId}</span>
+                </>
+              ) : null}
+              .
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-6 overflow-y-auto p-6">
+          <form
+            onSubmit={submit}
+            className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4"
+          >
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                Notification type
+              </label>
+              <input
+                required
+                value={notificationType}
+                onChange={(event) => setNotificationType(event.target.value)}
+                placeholder="coaching_profile_live"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <p className="mt-1 text-xs text-gray-400">
+                The key received by BlueMQ from your application.
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                Resolve to {channel} template
+              </label>
+              <select
+                required
+                value={resolvesTo}
+                onChange={(event) => setResolvesTo(event.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="">Select a synced template</option>
+                {templateNames.map((name) => (
+                  <option
+                    key={name}
+                    value={name}
+                    disabled={name === notificationType.trim()}
+                  >
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-400">
+                The target must already exist for this channel.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              {editingId ? (
+                <button
+                  type="button"
+                  onClick={() => resetForm(initialType)}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                >
+                  Cancel edit
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                disabled={busy || !notificationType.trim() || !resolvesTo}
+                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {busy ? (
+                  <RefreshCw size={14} className="animate-spin" />
+                ) : (
+                  <Save size={14} />
+                )}
+                {editingId ? "Update alias" : "Save alias"}
+              </button>
+            </div>
+          </form>
+
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-gray-900">
+                Configured aliases
+              </h4>
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+                {channelAliases.length}
+              </span>
+            </div>
+
+            {channelAliases.length === 0 ? (
+              <div className="rounded-xl border-2 border-dashed border-gray-200 px-4 py-8 text-center">
+                <Link2 size={24} className="mx-auto text-gray-300" />
+                <p className="mt-2 text-sm text-gray-500">
+                  No aliases configured for this channel.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {channelAliases.map((alias) => (
+                  <div
+                    key={alias.id}
+                    className="flex items-center gap-3 rounded-xl border border-gray-200 p-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-xs">
+                        <code className="truncate font-medium text-gray-800">
+                          {alias.notification_type}
+                        </code>
+                        <ArrowRight
+                          size={12}
+                          className="shrink-0 text-gray-400"
+                        />
+                        <code className="truncate font-medium text-green-700">
+                          {alias.resolves_to}
+                        </code>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => editAlias(alias)}
+                      disabled={busy}
+                      className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-indigo-600"
+                      title="Edit alias"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => remove(alias)}
+                      disabled={busy}
+                      className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                      title="Delete alias"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 // ─── TemplateCard (mobile) ────────────────────────────────────────────────────
 
-function TemplateCard({ template, onEdit, onDelete }) {
+function TemplateCard({
+  template,
+  onEdit,
+  onDelete,
+  onSettings,
+  aliasTarget,
+}) {
   const channelConfig = getTemplateChannelConfig(template.channel);
 
   return (
@@ -237,6 +531,12 @@ function TemplateCard({ template, onEdit, onDelete }) {
             <span className="font-mono text-xs font-medium text-gray-700 break-all">
               {template.type}
             </span>
+            {aliasTarget ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                <Link2 size={10} />
+                uses {aliasTarget}
+              </span>
+            ) : null}
             <span
               className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                 channelConfig.badgeClass || "bg-gray-50 text-gray-700"
@@ -252,6 +552,9 @@ function TemplateCard({ template, onEdit, onDelete }) {
               }`}
             >
               {template.is_active !== false ? "Active" : "Inactive"}
+              {template.status && template.source === "meta"
+                ? ` · ${template.status}`
+                : ""}
             </span>
           </div>
           <p className="text-xs text-gray-500">{getRuleLabel(template)}</p>
@@ -266,8 +569,9 @@ function TemplateCard({ template, onEdit, onDelete }) {
         </div>
         <div className="shrink-0">
           <ActionsMenu
-            onEdit={() => onEdit(template.id)}
-            onDelete={() => onDelete(template.id)}
+            onEdit={() => onEdit(template)}
+            onDelete={onDelete ? () => onDelete(template) : null}
+            onSettings={onSettings ? () => onSettings(template) : null}
           />
         </div>
       </div>
@@ -284,6 +588,12 @@ export default function TemplatesPage() {
   const [filterType, setFilterType] = useState("");
   const [filterChannel, setFilterChannel] = useState("");
   const [page, setPage] = useState(1);
+  const [syncing, setSyncing] = useState(false);
+  const [sessions, setSessions] = useState([]);
+  const [entityId, setEntityId] = useState("");
+  const [aliases, setAliases] = useState([]);
+  const [aliasSheetTemplate, setAliasSheetTemplate] = useState(null);
+  const [aliasTargetTemplates, setAliasTargetTemplates] = useState([]);
 
   // Date-range filter state — default to "Last 7 days"
   const [dateRange, setDateRange] = useState({
@@ -312,33 +622,164 @@ export default function TemplatesPage() {
   const fetchTemplates = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await api.getTemplates({
-        channel: filterChannel || undefined,
-        ...dateApiParams,
-      });
-      setTemplates(response.data || []);
+      const [response, waResponse, aliasResponse] = await Promise.all([
+        api.getTemplates({
+          channel:
+            filterChannel && filterChannel !== "whatsapp"
+              ? filterChannel
+              : undefined,
+          ...dateApiParams,
+        }),
+        filterChannel && filterChannel !== "whatsapp"
+          ? Promise.resolve({ data: [] })
+          : api.getWhatsAppTemplates({
+              entityId: entityId || undefined,
+              source: "cache",
+              status: "ALL",
+            }),
+        api.getTemplateAliases({ entityId: entityId || undefined }),
+      ]);
+      const localRows = (response.data || []).filter(
+        (row) => row.channel !== "whatsapp",
+      );
+      const waRows = (waResponse.data || []).map((row) => ({
+        ...row,
+        source: "meta",
+        is_active: String(row.status || "").toUpperCase() === "APPROVED",
+        created_at: row.cached_at,
+      }));
+      const merged =
+        filterChannel === "whatsapp" ? waRows : [...waRows, ...localRows];
+      setTemplates(merged);
+      setAliases(aliasResponse.data || []);
     } catch (error) {
       toast.error(`Failed to load templates: ${error.message}`);
     } finally {
       setLoading(false);
     }
-  }, [filterChannel, dateApiParams]);
+  }, [filterChannel, dateApiParams, entityId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSessions() {
+      try {
+        const response = await api.listWhatsAppSessions("active");
+        if (cancelled) return;
+        const list = response.sessions || [];
+        setSessions(list);
+        if (list.length === 1) {
+          setEntityId(list[0].entity_id);
+        }
+      } catch {
+        if (!cancelled) setSessions([]);
+      }
+    }
+    loadSessions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setPage(1);
     fetchTemplates();
   }, [fetchTemplates]);
 
-  async function handleDelete(templateId) {
+  async function handleDelete(template) {
+    if (template.source === "meta") return;
     if (!confirm("Delete this template permanently?")) return;
     try {
-      await api.deleteTemplate(templateId);
+      await api.deleteTemplate(template.id);
       toast.success("Template deleted");
       fetchTemplates();
     } catch (error) {
       toast.error(error.message);
     }
   }
+
+  async function handleSync() {
+    if (sessions.length > 1 && !entityId) {
+      toast.error("Select a WhatsApp session before syncing");
+      return;
+    }
+    setSyncing(true);
+    try {
+      const result = await api.syncWhatsAppTemplates({
+        entityId: entityId || undefined,
+      });
+      const stats = result.data || {};
+      toast.success(
+        `Synced ${stats.total || 0}: ${stats.created || 0} new, ${stats.updated || 0} updated, ${stats.skipped || 0} skipped, ${stats.pruned || 0} pruned`,
+      );
+      if (result.truncated || stats.truncated) {
+        toast.error(
+          result.error || "Sync was rate-limited. Some templates may be missing.",
+        );
+      }
+      fetchTemplates();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleSaveAlias(alias) {
+    try {
+      await api.saveTemplateAlias(alias);
+      toast.success(alias.id ? "Template alias updated" : "Template alias saved");
+      const response = await api.getTemplateAliases({
+        entityId: entityId || undefined,
+      });
+      setAliases(response.data || []);
+    } catch (error) {
+      toast.error(error.message);
+      throw error;
+    }
+  }
+
+  async function handleDeleteAlias(alias) {
+    try {
+      await api.deleteTemplateAlias(alias.id);
+      toast.success("Template alias removed");
+      setAliases((current) => current.filter((item) => item.id !== alias.id));
+    } catch (error) {
+      toast.error(error.message);
+      throw error;
+    }
+  }
+
+  async function handleAliasSettings(template) {
+    if (template.channel === "whatsapp" && !entityId) {
+      toast.error("Select a WhatsApp session before configuring aliases");
+      return;
+    }
+    try {
+      const response =
+        template.channel === "whatsapp"
+          ? await api.getWhatsAppTemplates({
+              entityId,
+              source: "cache",
+              status: "ALL",
+            })
+          : await api.getTemplates({ channel: template.channel });
+      setAliasTargetTemplates(response.data || []);
+      setAliasSheetTemplate(template);
+    } catch (error) {
+      toast.error(`Failed to load alias targets: ${error.message}`);
+    }
+  }
+
+  const aliasesByType = useMemo(
+    () =>
+      new Map(
+        aliases.map((alias) => [
+          `${alias.channel}:${alias.notification_type}`,
+          alias.resolves_to,
+        ]),
+      ),
+    [aliases],
+  );
 
   const searchTokens = useMemo(() => toSearchTokens(filterType), [filterType]);
   const filteredTemplates = useMemo(() => {
@@ -365,8 +806,12 @@ export default function TemplatesPage() {
     setPage(Math.max(1, Math.min(nextPage, totalPages)));
   }
 
-  function handleEdit(templateId) {
-    navigate(`/templates/${templateId}/edit`);
+  function handleEdit(template) {
+    if (template.source === "meta") {
+      navigate(`/templates/whatsapp/${encodeURIComponent(template.name)}/edit`);
+      return;
+    }
+    navigate(`/templates/${template.id}/edit`);
   }
 
   // Human-readable label for the active date filter
@@ -388,13 +833,38 @@ export default function TemplatesPage() {
             Manage default and condition-based templates across channels.
           </p>
         </div>
-        <button
-          onClick={() => navigate("/templates/new")}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-        >
-          <Plus size={16} />
-          New Template
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {sessions.length > 1 ? (
+            <select
+              value={entityId}
+              onChange={(e) => setEntityId(e.target.value)}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm"
+            >
+              <option value="">Select WhatsApp session</option>
+              {sessions.map((session) => (
+                <option key={session.entity_id} value={session.entity_id}>
+                  {session.entity_id}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <button
+            type="button"
+            onClick={handleSync}
+            disabled={syncing}
+            className="inline-flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-4 py-2 text-sm font-semibold text-green-800 hover:bg-green-100 disabled:opacity-50"
+          >
+            <CloudDownload size={16} className={syncing ? "animate-pulse" : ""} />
+            {syncing ? "Syncing..." : "Sync WhatsApp via Meta"}
+          </button>
+          <button
+            onClick={() => navigate("/templates/new")}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+          >
+            <Plus size={16} />
+            New Template
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -479,10 +949,16 @@ export default function TemplatesPage() {
           <div className="space-y-3 md:hidden">
             {paginatedTemplates.map((template) => (
               <TemplateCard
-                key={template.id}
+                key={template.id || `${template.name}-${template.language}`}
                 template={template}
                 onEdit={handleEdit}
-                onDelete={handleDelete}
+                onDelete={
+                  template.source === "meta" ? null : handleDelete
+                }
+                onSettings={handleAliasSettings}
+                aliasTarget={aliasesByType.get(
+                  `${template.channel}:${template.type}`,
+                )}
               />
             ))}
           </div>
@@ -542,6 +1018,22 @@ export default function TemplatesPage() {
                           >
                             {template.type}
                           </span>
+                          {aliasesByType.get(
+                            `${template.channel}:${template.type}`,
+                          ) ? (
+                            <span
+                              className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700"
+                              title={`${template.channel} resolves to ${aliasesByType.get(`${template.channel}:${template.type}`)}`}
+                            >
+                              <Link2 size={10} className="shrink-0" />
+                              <span className="truncate">
+                                uses{" "}
+                                {aliasesByType.get(
+                                  `${template.channel}:${template.type}`,
+                                )}
+                              </span>
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           <span
@@ -584,15 +1076,22 @@ export default function TemplatesPage() {
                                 : "bg-gray-100 text-gray-500"
                             }`}
                           >
-                            {template.is_active !== false
-                              ? "Active"
-                              : "Inactive"}
+                            {template.source === "meta"
+                              ? template.status || "Cached"
+                              : template.is_active !== false
+                                ? "Active"
+                                : "Inactive"}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <ActionsMenu
-                            onEdit={() => handleEdit(template.id)}
-                            onDelete={() => handleDelete(template.id)}
+                            onEdit={() => handleEdit(template)}
+                            onDelete={
+                              template.source === "meta"
+                                ? null
+                                : () => handleDelete(template)
+                            }
+                            onSettings={() => handleAliasSettings(template)}
                           />
                         </td>
                       </tr>
@@ -627,6 +1126,21 @@ export default function TemplatesPage() {
           ) : null}
         </>
       )}
+      {aliasSheetTemplate !== null ? (
+        <TemplateAliasSheet
+          key={`${entityId}:${aliasSheetTemplate.channel}:${aliasSheetTemplate.type}`}
+          entityId={entityId}
+          channel={aliasSheetTemplate.channel}
+          initialType={
+            aliasSheetTemplate.name || aliasSheetTemplate.type || ""
+          }
+          aliases={aliases}
+          channelTemplates={aliasTargetTemplates}
+          onSave={handleSaveAlias}
+          onDelete={handleDeleteAlias}
+          onClose={() => setAliasSheetTemplate(null)}
+        />
+      ) : null}
     </div>
   );
 }

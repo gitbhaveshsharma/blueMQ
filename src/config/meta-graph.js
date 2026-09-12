@@ -1,0 +1,7 @@
+module.exports = {
+  META_GRAPH_BASE: "https://graph.facebook.com",
+  META_API_VERSION: "v19.0",
+  META_GRAPH_TIMEOUT_MS: 15000,
+  META_RATE_LIMIT_RETRIES: 4,
+  META_RATE_LIMIT_BASE_DELAY_MS: 1000,
+};
