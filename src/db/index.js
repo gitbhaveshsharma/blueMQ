@@ -1,8 +1,36 @@
+const net = require("net");
+const dns = require("dns");
 const { Pool } = require("pg");
 const config = require("../config");
 
 let pool;
 let sqlClient;
+
+// Neon resolves to both A and AAAA records. Node 20+ enables Happy Eyeballs
+// (autoSelectFamily) by default, which races both families; on networks where
+// IPv6 egress is blackholed the race aborts with ETIMEDOUT even though IPv4
+// works. Scoped to the pg sockets only so Redis/HTTP keep default behaviour.
+function createPgSocket() {
+  const socket = new net.Socket();
+  const connect = socket.connect.bind(socket);
+
+  socket.connect = (...args) => {
+    const [port, host] = args;
+    if (typeof port !== "number" || typeof host !== "string") {
+      return connect(...args);
+    }
+    return connect({
+      port,
+      host,
+      autoSelectFamily: false,
+      // verbatim: false puts IPv4 first, falling back to IPv6 for v6-only hosts
+      lookup: (hostname, options, callback) =>
+        dns.lookup(hostname, { ...options, verbatim: false }, callback),
+    });
+  };
+
+  return socket;
+}
 
 // Categorise errors so callers can react appropriately
 const ErrorType = {
@@ -103,6 +131,7 @@ function getDb() {
     pool = new Pool({
       connectionString: config.database.url,
       ssl: { rejectUnauthorized: false },
+      stream: createPgSocket,
       connectionTimeoutMillis: config.database.connectionTimeoutMs || 30000,
       idleTimeoutMillis: 60000, // release idle clients after 60s
       max: 10,
