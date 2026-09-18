@@ -167,6 +167,23 @@ CREATE INDEX IF NOT EXISTS idx_notifications_inbox
   ON notifications (app_id, external_user_id, is_removed, created_at DESC)
   WHERE is_removed = false;
 
+-- Tenant scoping and idempotency support
+ALTER TABLE notifications
+  ADD COLUMN IF NOT EXISTS entity_id VARCHAR(255) DEFAULT NULL;
+
+ALTER TABLE notifications
+  ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255) DEFAULT NULL;
+
+DROP INDEX IF EXISTS idx_notifications_idempotency_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_tenant_idempotency
+  ON notifications (app_id, COALESCE(entity_id, ''), idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_notifications_app_entity
+  ON notifications (app_id, entity_id, created_at DESC)
+  WHERE entity_id IS NOT NULL;
+
 
 -- 4. Notification Logs (one row per channel attempt)
 CREATE TABLE IF NOT EXISTS notification_logs (
