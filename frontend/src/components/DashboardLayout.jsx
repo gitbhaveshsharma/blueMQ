@@ -13,6 +13,9 @@ import {
   Settings,
   Clock,
   Users,
+  Shield,
+  Webhook,
+  Activity,
 } from "lucide-react";
 import { createElement, useState } from "react";
 
@@ -21,14 +24,13 @@ const NAV_ITEMS = [
   { to: "/templates", label: "Templates", icon: FileText },
   { to: "/send", label: "Send", icon: Send },
   { to: "/notifications", label: "Notifications", icon: Bell },
-  {
-    to: "/notification-logs",
-    label: "Notification Logs",
-    icon: BarChart3,
-  },
+  { to: "/notification-logs", label: "Notification Logs", icon: BarChart3 },
   { to: "/whatsapp", label: "WhatsApp", icon: MessageSquare },
   { to: "/audiences", label: "Audiences", icon: Users },
   { to: "/schedules", label: "Schedules", icon: Clock },
+  { to: "/quota/profiles", label: "Quota Profiles", icon: Shield },
+  { to: "/quota/usage", label: "Usage Overview", icon: Activity },
+  { to: "/webhooks", label: "Webhooks", icon: Webhook },
   { to: "/settings", label: "Settings", icon: Settings },
   { to: "/profile", label: "Profile", icon: User },
 ];

@@ -20,6 +20,11 @@ const {
   buildWhatsAppSendTemplate,
 } = require("../utils/whatsapp-template");
 const { resolveTemplateAlias } = require("../utils/template-alias");
+const {
+  appHasQuotas,
+  resolveLimit,
+  getPeriodStart,
+} = require("../utils/quota");
 
 const QUEUE_NAME = "scheduled-notification-poller";
 const STABLE_JOB_ID = "scheduled-notification-poll";
@@ -464,28 +469,107 @@ async function processSchedule(schedule, client) {
       const primaryTemplate = templateMap[normalizedChannels[0]];
       const primaryActionUrl = primaryTemplate?.actionUrl || actionUrl || null;
 
-      // Insert master notification row
+      // ─── Quota reserve (same client = inside the outer transaction) ──────
+      // We use the same pg client so quota_usage update and notification INSERT
+      // are both inside the existing BEGIN/COMMIT for atomicity.
+      const quotaOwnerId = resolvedParentEntityId || resolvedEntityId || null;
+      let acceptedChannels = [...normalizedChannels];
+      let quotaReservations = []; // [{channel, ownerId, periodStart}] for rollback-on-enqueue-fail
+
+      if (quotaOwnerId) {
+        try {
+          const sql = getDb();
+          const hasQuotas = await appHasQuotas(sql, schedule.client_id);
+          if (hasQuotas) {
+            const timezone = "Asia/Kolkata"; // default; app_settings cached separately
+            const blocked = [];
+
+            for (const ch of normalizedChannels) {
+              const lim = await resolveLimit(client, schedule.client_id, quotaOwnerId, ch);
+              if (!lim) continue; // no limit for this channel
+
+              const periodStart = getPeriodStart(lim.period, timezone);
+
+              if (1 > lim.limit) {
+                blocked.push(ch);
+                continue;
+              }
+
+              const upsertRes = await client.query(
+                `INSERT INTO quota_usage (app_id, owner_id, channel, period_start, reserved, updated_at)
+                 VALUES ($1, $2, $3, $4, 1, now())
+                 ON CONFLICT (app_id, owner_id, channel, period_start)
+                 DO UPDATE SET
+                   reserved = quota_usage.reserved + 1,
+                   updated_at = now()
+                 WHERE quota_usage.used + quota_usage.reserved + 1 <= $5
+                 RETURNING reserved`,
+                [schedule.client_id, quotaOwnerId, ch, periodStart, lim.limit],
+              );
+
+              if (upsertRes.rows.length === 0) {
+                blocked.push(ch);
+              } else {
+                quotaReservations.push({ channel: ch, ownerId: quotaOwnerId, periodStart });
+              }
+            }
+
+            if (blocked.length > 0) {
+              acceptedChannels = normalizedChannels.filter((ch) => !blocked.includes(ch));
+              if (acceptedChannels.length === 0) {
+                console.warn(
+                  `[schedule-worker] All channels quota-blocked for user ${item.user_id} (owner=${quotaOwnerId})`,
+                );
+                failCount++;
+                continue;
+              }
+            }
+          }
+        } catch (reserveErr) {
+          console.warn(`[schedule-worker] Quota reserve error for ${item.user_id}: ${reserveErr.message} — proceeding without quota`);
+        }
+      }
+
+      // Insert master notification row (with parent_entity_id + expected_channels)
+      const expectedInternalChannels = acceptedChannels.map(
+        (ch) => toInternalChannel(ch) || ch,
+      );
       const insertResult = await client.query(
         `INSERT INTO notifications
-           (app_id, external_user_id, type, title, message, data, action_url, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+           (app_id, entity_id, parent_entity_id, external_user_id, type,
+            title, message, data, action_url, status, expected_channels)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10)
          RETURNING id`,
         [
           schedule.client_id,
+          resolvedEntityId || null,
+          resolvedParentEntityId || null,
           item.user_id,
           schedule.template_key,
           primaryTemplate?.title || null,
           primaryTemplate?.body || null,
           JSON.stringify(payloadData),
           primaryActionUrl,
+          expectedInternalChannels,
         ],
       );
 
       const notificationId = insertResult.rows[0].id;
 
+      // Record quota_reservations rows (non-critical; stale cleanup will handle failures)
+      for (const qr of quotaReservations) {
+        client.query(
+          `INSERT INTO quota_reservations
+             (notification_id, app_id, owner_id, entity_id, channel, units, period_start)
+           VALUES ($1, $2, $3, $4, $5, 1, $6)
+           ON CONFLICT (notification_id, channel) DO NOTHING`,
+          [notificationId, schedule.client_id, qr.ownerId, resolvedEntityId || null, qr.channel, qr.periodStart],
+        ).catch((e) => console.warn(`[schedule-worker] quota_reservations insert failed: ${e.message}`));
+      }
+
       // Build templatesByChannel
       const templatesByChannel = {};
-      for (const channel of normalizedChannels) {
+      for (const channel of acceptedChannels) {
         const internalChannel = toInternalChannel(channel);
         if (!internalChannel) {
           continue;
@@ -505,7 +589,7 @@ async function processSchedule(schedule, client) {
         user: payloadUser,
         actionUrl: primaryActionUrl,
         data: payloadData,
-        channels: toInternalChannels(normalizedChannels),
+        channels: toInternalChannels(acceptedChannels),
         entityId: resolvedEntityId,
         parentEntityId: resolvedParentEntityId,
       });

@@ -777,3 +777,209 @@ curl -X PATCH -H 'x-api-key: YOUR_KEY' -H 'content-type: application/json' \
 - [ ] Test with manual trigger (`POST /schedules/:id/trigger`) before relying on auto-poll
 - [ ] Execution logs reviewed via dashboard or `GET /schedules/:id/logs`
 
+---
+
+## 21. Quota System
+
+BlueMQ enforces per-channel notification rate limits per owner (coaching center / parent entity). See `docs/quotas.md` for full reference.
+
+### 21.1 Overview
+
+- **Owner** = `parent_entity_id` if provided, else `entity_id`.
+- **Profiles** define per-channel limits (e.g., 5,000 push/month).
+- **Owner Quota** assigns a profile (and optional channel-level overrides) to a specific owner.
+- Quota is reserved atomically at enqueue time and settled (consumed or released) in the worker transaction.
+
+### 21.2 Required Fields When Quotas Are Configured
+
+If your app has any quota profiles or owner_quota rows, `entity_id` (or `parent_entity_id`) is **required** on every `/notify` call. The API returns `HTTP 400` otherwise.
+
+### 21.3 Partial Acceptance
+
+If only some channels exceed quota, the accepted channels are enqueued and the response includes `blocked_quota`. If all channels are blocked, `HTTP 429` is returned.
+
+### 21.4 Quota API
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/quota/profiles` | List profiles |
+| POST | `/quota/profiles` | Create profile |
+| PUT | `/quota/profiles/:id` | Update profile |
+| DELETE | `/quota/profiles/:id` | Delete profile |
+| POST | `/quota/profiles/:id/limits` | Upsert channel limit |
+| DELETE | `/quota/profiles/:id/limits/:channel` | Remove channel limit |
+| GET | `/quota/owners` | List owner quotas |
+| PUT | `/quota/owners/:ownerId` | Upsert owner quota |
+| DELETE | `/quota/owners/:ownerId` | Remove owner quota |
+| GET | `/quota/usage` | Current period usage |
+| GET | `/quota/thresholds` | Recent threshold events |
+
+### 21.5 Quota Timezone
+
+Stored in `app_settings.quota_timezone` (default: `Asia/Kolkata`). Update via the settings API or directly in the database.
+
+---
+
+## 22. Webhooks
+
+BlueMQ delivers real-time HTTP callbacks to your endpoint. See `docs/webhooks.md` for full reference.
+
+### 22.1 Supported Events
+
+| Event | When |
+|---|---|
+| `notification.final` | All expected channels settled (sent or failed) |
+| `quota.threshold` | Usage crosses 80% or 100% for first time in period |
+
+### 22.2 Quick Setup
+
+```
+POST /webhooks/config
+{ "url": "https://your-app.com/hook", "events": ["notification.final", "quota.threshold"] }
+```
+
+The response includes a `secret` shown **once only**. Store it immediately.
+
+### 22.3 Signature Verification
+
+```
+x-bluemq-signature: sha256=<hmac-sha256-of-raw-body>
+```
+
+```js
+const crypto = require('crypto');
+function verify(secret, rawBody, sig) {
+  const exp = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  return exp.length === sig.length && crypto.timingSafeEqual(Buffer.from(exp), Buffer.from(sig));
+}
+```
+
+### 22.4 Delivery & Retry
+
+- 5 attempts with backoff: 0 s → 30 s → 5 min → 30 min → 2 h
+- `webhook_deliveries` is the source of truth (survives process restarts)
+- Dashboard retry: **Webhooks → Delivery History → Retry**
+- API retry: `POST /webhooks/deliveries/:id/retry`
+
+### 22.5 Webhook API
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/webhooks/config` | Get config (no secret) |
+| POST | `/webhooks/config` | Create/replace (returns secret once) |
+| PATCH | `/webhooks/config` | Update URL/events/is_active/rotate_secret |
+| DELETE | `/webhooks/config` | Remove |
+| GET | `/webhooks/deliveries` | List delivery history |
+| GET | `/webhooks/deliveries/:id` | Full delivery details |
+| POST | `/webhooks/deliveries/:id/retry` | Reset and retry |
+
+---
+
+## 23. Rich Notification Payload Contract
+
+The `/notify` endpoint accepts a rich payload that is passed through to workers as-is in the `data` JSONB column. No normalizer is required; include any fields your templates or downstream consumers need.
+
+### 23.1 Full Payload Example
+
+```json
+{
+  "userId": "f604bdf3-4765-426f-b53d-3b2c69df7162",
+  "type": "attendance_marked",
+  "channels": ["push", "inapp"],
+  "variables": {
+    "subject": "Physics",
+    "class_name": "Physics Intermediate",
+    "branch_name": "Main Campus",
+    "student_name": "Bhavesh",
+    "teacher_name": "Ranjeet Kumar",
+    "attendance_date": "2026-09-29",
+    "late_by_minutes": "0",
+    "attendance_status": "PRESENT",
+    "coaching_center_name": "TheBlueBe",
+    "action_url": "/lms/student/...",
+    "actionUrl": "/lms/student/..."
+  },
+  "user": {
+    "email": "user@example.com",
+    "phone": "+919999999999",
+    "fcmToken": "firebase-device-token"
+  },
+  "actionUrl": "/lms/student/...",
+  "entityId": "branch-uuid",
+  "parentEntityId": "coaching-center-uuid"
+}
+```
+
+### 23.2 Field Mapping
+
+| Payload Field | DB Column | Notes |
+|---|---|---|
+| `userId` / `user_id` | `external_user_id` | Required |
+| `type` | `type` | Required, maps to template |
+| `channels` | `expected_channels` (array) | Required |
+| `entity_id` / `entityId` | `entity_id` | Branch UUID |
+| `parent_entity_id` / `parentEntityId` | `parent_entity_id` | Coaching center UUID (subscription owner / quota owner) |
+| `variables` | Passed to template renderer | All template placeholders |
+| `user.fcmToken` | Job payload for push worker | Also accepted as `fcm_token`, `push_token` |
+| `data` | `data` JSONB | Arbitrary context |
+| `action_url` / `actionUrl` | `action_url` | Deep link |
+| `sender_id` / `platform` | `data` JSONB | Pass-through, no separate column |
+
+---
+
+## 24. `POST /notify/batch`
+
+> **Upcoming** — use `/notify` in a loop for now. The `/notify/batch` endpoint accepts `recipients[]` and reserves quota once for the whole batch in alphabetical channel order, distributing accepted slots to recipients in deterministic order.
+
+---
+
+## 25. entity_id → parent_entity_id Consistency Guard
+
+The `entity_parent_map` table records the first `(entity_id, parent_entity_id)` pairing seen per app. All subsequent calls must use the same pairing.
+
+**If the pairing changes, the API returns `HTTP 409`:**
+```json
+{
+  "error": "entity_id \"branch-north\" was previously registered under parent_entity_id \"coaching-center-a\". Cannot change parent to \"coaching-center-b\" via the notify path."
+}
+```
+
+This prevents accidental re-parenting and protects quota integrity.
+
+---
+
+## 26. notification.final Detection
+
+The `expected_channels` column on `notifications` records every channel that was accepted and enqueued. After each terminal settle (success, non-retryable failure, or exhausted retries), the worker checks whether all expected channels now have a terminal `notification_logs` entry. If yes, `notification.final` is enqueued into `webhook_deliveries`.
+
+The query used:
+```sql
+SELECT DISTINCT channel FROM notification_logs
+WHERE notification_id = $1
+  AND status IN ('sent', 'failed', 'permanently_failed');
+```
+
+All expected channels must appear in this set.
+
+---
+
+## 27. Go-Live Checklist for Quotas & Webhooks
+
+### Quotas
+- [ ] At least one quota profile created via `/quota/profiles`
+- [ ] Owners assigned to profiles via `/quota/owners/:ownerId`
+- [ ] `quota_timezone` set correctly in `app_settings`
+- [ ] All `/notify` calls include `entity_id` or `parent_entity_id`
+- [ ] Tested partial-acceptance response (`blocked_quota` field in response)
+- [ ] Threshold events verified via `/quota/thresholds`
+
+### Webhooks
+- [ ] Endpoint deployed and reachable via HTTPS
+- [ ] Secret stored securely (env variable, secrets manager)
+- [ ] Signature verification implemented and tested
+- [ ] Endpoint responds within 15 seconds
+- [ ] Endpoint returns 2xx for all accepted deliveries
+- [ ] Delivery history reviewed via dashboard or `/webhooks/deliveries`
+- [ ] At least one manual retry tested via dashboard
+- [ ] `notification.final` handler idempotent (keyed on `x-bluemq-delivery-id`)
+

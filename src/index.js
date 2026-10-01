@@ -32,6 +32,8 @@ const schedulesRoutes = require("./api/routes/schedules");
 const audiencesRoutes = require("./api/routes/audiences");
 const whatsappTemplatesRoutes = require("./api/routes/whatsapp-templates");
 const templateAliasesRoutes = require("./api/routes/template-aliases");
+const quotaRoutes = require("./api/routes/quota");
+const webhookConfigRoutes = require("./api/routes/webhook-config");
 const { attachWebSocketServer } = require("./ws");
 
 function createExpressApp() {
@@ -62,6 +64,8 @@ function registerRoutes(app) {
   app.use("/audiences", authMiddleware, audiencesRoutes);
   app.use("/whatsapp-templates", authMiddleware, whatsappTemplatesRoutes);
   app.use("/template-aliases", authMiddleware, templateAliasesRoutes);
+  app.use("/quota", authMiddleware, quotaRoutes);
+  app.use("/webhooks", authMiddleware, webhookConfigRoutes);
 }
 
 function registerHttpHandlers(app) {

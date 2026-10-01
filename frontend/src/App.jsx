@@ -17,6 +17,9 @@ import SchedulesPage from "./pages/SchedulesPage";
 import ScheduleEditorPage from "./pages/ScheduleEditorPage";
 import AudiencesPage from "./pages/AudiencesPage";
 import AudienceDetailPage from "./pages/AudienceDetailPage";
+import QuotaProfilesPage from "./pages/QuotaProfilesPage";
+import WebhookSettingsPage from "./pages/WebhookSettingsPage";
+import UsageOverviewPage from "./pages/UsageOverviewPage";
 
 export default function App() {
   return (
@@ -56,10 +59,10 @@ export default function App() {
             />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/audiences" element={<AudiencesPage />} />
-            <Route
-              path="/audiences/:audienceId"
-              element={<AudienceDetailPage />}
-            />
+            <Route path="/audiences/:audienceId" element={<AudienceDetailPage />} />
+            <Route path="/quota/profiles" element={<QuotaProfilesPage />} />
+            <Route path="/webhooks" element={<WebhookSettingsPage />} />
+            <Route path="/quota/usage" element={<UsageOverviewPage />} />
           </Route>
         </Route>
 

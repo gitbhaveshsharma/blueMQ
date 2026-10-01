@@ -405,6 +405,82 @@ class ApiClient {
       `/template-aliases/${encodeURIComponent(id)}`,
     );
   }
+
+  // ── Quota: Profiles ──
+  getQuotaProfiles() {
+    return this.#request("GET", "/quota/profiles");
+  }
+
+  createQuotaProfile(data) {
+    return this.#request("POST", "/quota/profiles", { body: data });
+  }
+
+  updateQuotaProfile(id, data) {
+    return this.#request("PUT", `/quota/profiles/${id}`, { body: data });
+  }
+
+  deleteQuotaProfile(id) {
+    return this.#request("DELETE", `/quota/profiles/${id}`);
+  }
+
+  upsertProfileLimit(profileId, data) {
+    return this.#request("POST", `/quota/profiles/${profileId}/limits`, { body: data });
+  }
+
+  deleteProfileLimit(profileId, channel) {
+    return this.#request("DELETE", `/quota/profiles/${profileId}/limits/${channel}`);
+  }
+
+  // ── Quota: Owners ──
+  getQuotaOwners() {
+    return this.#request("GET", "/quota/owners");
+  }
+
+  upsertOwnerQuota(ownerId, data) {
+    return this.#request("PUT", `/quota/owners/${encodeURIComponent(ownerId)}`, { body: data });
+  }
+
+  deleteOwnerQuota(ownerId) {
+    return this.#request("DELETE", `/quota/owners/${encodeURIComponent(ownerId)}`);
+  }
+
+  // ── Quota: Usage ──
+  getQuotaUsage({ owner_id, channel, period_start } = {}) {
+    return this.#request("GET", "/quota/usage", { params: { owner_id, channel, period_start } });
+  }
+
+  getThresholdEvents({ owner_id, channel, limit } = {}) {
+    return this.#request("GET", "/quota/thresholds", { params: { owner_id, channel, limit } });
+  }
+
+  // ── Webhooks ──
+  getWebhookConfig() {
+    return this.#request("GET", "/webhooks/config");
+  }
+
+  createWebhookConfig(data) {
+    return this.#request("POST", "/webhooks/config", { body: data });
+  }
+
+  updateWebhookConfig(data) {
+    return this.#request("PATCH", "/webhooks/config", { body: data });
+  }
+
+  deleteWebhookConfig() {
+    return this.#request("DELETE", "/webhooks/config");
+  }
+
+  getWebhookDeliveries({ status, event_type, page, limit } = {}) {
+    return this.#request("GET", "/webhooks/deliveries", { params: { status, event_type, page, limit } });
+  }
+
+  getWebhookDelivery(id) {
+    return this.#request("GET", `/webhooks/deliveries/${id}`);
+  }
+
+  retryWebhookDelivery(id) {
+    return this.#request("POST", `/webhooks/deliveries/${id}/retry`);
+  }
 }
 
 export const api = new ApiClient();

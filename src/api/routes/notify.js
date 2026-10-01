@@ -21,6 +21,11 @@ const {
   buildWhatsAppSendTemplate,
 } = require("../../utils/whatsapp-template");
 const { resolveTemplateAlias } = require("../../utils/template-alias");
+const {
+  appHasQuotas,
+  reserveForChannels,
+  guardEntityParent,
+} = require("../../utils/quota");
 
 const router = Router();
 
@@ -162,19 +167,19 @@ async function prepareTemplates({
     );
     templateMap[channel] = selected
       ? {
-          title: renderTemplate(selected.title, variables),
-          body: renderTemplate(selected.body, variables),
-          bodyFormat: selected.body_format || "text",
-          ctaText: renderTemplate(selected.cta_text, variables),
-          actionUrl: renderTemplate(selected.cta_url, variables),
-        }
+        title: renderTemplate(selected.title, variables),
+        body: renderTemplate(selected.body, variables),
+        bodyFormat: selected.body_format || "text",
+        ctaText: renderTemplate(selected.cta_text, variables),
+        actionUrl: renderTemplate(selected.cta_url, variables),
+      }
       : {
-          title: variables?.title || type.replace(/_/g, " "),
-          body: variables?.body || variables?.message || `Notification: ${type}`,
-          bodyFormat: "text",
-          ctaText: variables?.cta_text || null,
-          actionUrl: variables?.cta_url || null,
-        };
+        title: variables?.title || type.replace(/_/g, " "),
+        body: variables?.body || variables?.message || `Notification: ${type}`,
+        bodyFormat: "text",
+        ctaText: variables?.cta_text || null,
+        actionUrl: variables?.cta_url || null,
+      };
   }
 
   return { templateMap, resolvedChannels: channels };
@@ -445,10 +450,40 @@ async function notifyHandler(req, res) {
 
     const sql = getDb();
 
+    // ─── 1b. Entity-parent guard ──────────────────────────────────────────
+    // If both entity_id and parent_entity_id are provided, verify the mapping
+    // is consistent with the first time this pair was seen for this app.
+    if (resolvedEntityId && resolvedParentEntityId) {
+      const guardResult = await guardEntityParent(
+        sql,
+        appId,
+        resolvedEntityId,
+        resolvedParentEntityId,
+      );
+      if (guardResult.conflict) {
+        return res.status(409).json({
+          error:
+            `entity_id "${resolvedEntityId}" was previously registered under ` +
+            `parent_entity_id "${guardResult.storedParent}". ` +
+            `Cannot change parent to "${resolvedParentEntityId}" via the notify path.`,
+        });
+      }
+    }
+
+    // ─── 1c. Quota: require entity_id if app has quotas configured ────────
+    // Cached for 60 s; does not add per-request latency in steady state.
+    const quotaOwnerId = resolvedParentEntityId || resolvedEntityId || null;
+    if (!quotaOwnerId) {
+      const hasQuotas = await appHasQuotas(sql, appId);
+      if (hasQuotas) {
+        return res.status(400).json({
+          error:
+            "entity_id (or parent_entity_id) is required for this app because quota profiles are configured.",
+        });
+      }
+    }
+
     // ─── 2. Idempotency check ──────────────────────────────────────────────
-    // If the caller supplies an idempotency_key and we already have a
-    // notification for it under this (app_id + entity_id), return the existing
-    // record immediately — no new DB row, no new queue jobs.
     if (resolvedIdempotencyKey) {
       const existing = await findByIdempotencyKey(
         sql,
@@ -467,9 +502,6 @@ async function notifyHandler(req, res) {
     }
 
     // ─── 3. Prepare templates ──────────────────────────────────────────────
-    // Audience broadcasts pass a request-scoped cache so templates are
-    // prepared once per entity/language combination while the public
-    // /notify contract and response stay exactly the same.
     const preparationKey = JSON.stringify({
       appId,
       effectiveChannels,
@@ -494,9 +526,6 @@ async function notifyHandler(req, res) {
     const { templateMap, resolvedChannels } = prepared;
 
     // ─── 3b. Automatic burst deduplication (when caller omitted key) ───────
-    // If no explicit idempotency key is supplied, check if an identical notification
-    // was submitted within the last 10 seconds (e.g. rapid UI double-clicks).
-    // Scoped strictly to (app_id, entity_id, user_id, type, exact data payload, message).
     if (!resolvedIdempotencyKey) {
       const primaryCandidate = templateMap[effectiveChannels[0]];
       const burstDuplicate = await findRecentBurstDuplicate(sql, {
@@ -518,25 +547,81 @@ async function notifyHandler(req, res) {
       }
     }
 
+    // ─── 3c. Quota reserve ────────────────────────────────────────────────
+    // Reserve one unit per channel. Channels that exceed the limit are
+    // removed from effectiveChannels (partial acceptance). The quota_reservations
+    // row is inserted atomically alongside the quota_usage update.
+    //
+    // If the app has no quotas configured (quotaOwnerId is null OR no limits
+    // exist for this owner+channel) the reservation is a no-op and every
+    // channel passes through unchanged.
+    const notificationId = uuidv4();
+    let quotaChannelResults = new Map();
+    let quotaBlockedChannels = [];
+
+    if (quotaOwnerId) {
+      // Map each accepted channel → 1 unit
+      const channelUnits = new Map(
+        resolvedChannels.map((ch) => [ch, 1]),
+      );
+      try {
+        const reserveResult = await reserveForChannels(sql, {
+          appId,
+          ownerId: quotaOwnerId,
+          entityId: resolvedEntityId,
+          notificationId,
+          channelUnits,
+        });
+        quotaChannelResults = reserveResult.channelResults;
+
+        // Split channels into accepted and blocked
+        const blockedSet = new Set(
+          [...quotaChannelResults.entries()]
+            .filter(([, r]) => r.blocked)
+            .map(([ch]) => ch),
+        );
+        quotaBlockedChannels = resolvedChannels.filter((ch) => blockedSet.has(ch));
+        effectiveChannels = resolvedChannels.filter((ch) => !blockedSet.has(ch));
+
+        if (effectiveChannels.length === 0) {
+          // All channels quota-blocked
+          return res.status(429).json({
+            success: false,
+            error: "All requested channels are quota-limited for this period.",
+            blocked_quota: quotaBlockedChannels.map((ch) => ({
+              channel: ch,
+              ...quotaChannelResults.get(ch),
+            })),
+          });
+        }
+      } catch (reserveErr) {
+        console.error("[notify] Quota reserve error:", reserveErr.message);
+        // Non-fatal: proceed without quota enforcement on transient errors
+      }
+    }
+
     // ─── 4. Save notification to DB ───────────────────────────────────────
-    // Use the first available template for the master record.
     const primaryTemplate = templateMap[effectiveChannels[0]];
     const primaryActionUrl = primaryTemplate?.actionUrl || action_url || null;
-    const notificationId = uuidv4();
+    // Store the accepted internal channel list for notification.final detection
+    const expectedInternalChannels = effectiveChannels.map(
+      (ch) => toInternalChannel(ch) || ch,
+    );
 
     try {
       await sql`
         INSERT INTO notifications
-          (id, app_id, entity_id, external_user_id, type, title, message, data, action_url, status, idempotency_key)
+          (id, app_id, entity_id, parent_entity_id, external_user_id, type,
+           title, message, data, action_url, status, idempotency_key, expected_channels)
         VALUES
-          (${notificationId}, ${appId}, ${resolvedEntityId || null}, ${user_id}, ${type},
+          (${notificationId}, ${appId}, ${resolvedEntityId || null},
+           ${resolvedParentEntityId || null}, ${user_id}, ${type},
            ${primaryTemplate.title}, ${primaryTemplate.body},
            ${JSON.stringify(data || {})}, ${primaryActionUrl}, 'pending',
-           ${resolvedIdempotencyKey})
+           ${resolvedIdempotencyKey}, ${expectedInternalChannels})
       `;
     } catch (insertErr) {
-      // Unique constraint violation on idempotency_key means a concurrent
-      // request already inserted this notification. Return the existing one.
+      // Unique constraint violation on idempotency_key: a concurrent request won.
       if (insertErr.code === "23505" && resolvedIdempotencyKey) {
         const existing = await findByIdempotencyKey(
           sql,
@@ -545,6 +630,15 @@ async function notifyHandler(req, res) {
           resolvedIdempotencyKey,
         );
         if (existing) {
+          // Release quota reservation created for this (now unused) notificationId
+          // The reservation was for a UUID that will never be enqueued; release it.
+          // (best-effort; stale cleanup will also catch this)
+          try {
+            await sql`
+              UPDATE quota_reservations SET status = 'released'
+              WHERE notification_id = ${notificationId} AND status = 'reserved'
+            `;
+          } catch (_) { /* ignore */ }
           return res.status(202).json({
             success: true,
             notification_id: existing.id,
@@ -557,10 +651,10 @@ async function notifyHandler(req, res) {
     }
 
     // ─── 5. Enqueue jobs per channel ──────────────────────────────────────
-    const internalChannels = toInternalChannels(resolvedChannels);
+    const internalChannels = toInternalChannels(effectiveChannels);
     const templatesByChannel = {};
 
-    for (const channel of resolvedChannels) {
+    for (const channel of effectiveChannels) {
       const internalChannel = toInternalChannel(channel);
       if (!internalChannel) continue;
       templatesByChannel[internalChannel] = {
@@ -572,19 +666,55 @@ async function notifyHandler(req, res) {
       };
     }
 
-    const enqueued = await enqueueNotification({
-      notificationId,
-      appId,
-      externalUserId: user_id,
-      type,
-      templatesByChannel,
-      user: { ...user, external_user_id: user_id },
-      actionUrl: action_url,
-      data,
-      channels: internalChannels,
-      entityId: resolvedEntityId,
-      parentEntityId: resolvedParentEntityId,
-    });
+    let enqueued;
+    try {
+      enqueued = await enqueueNotification({
+        notificationId,
+        appId,
+        externalUserId: user_id,
+        type,
+        templatesByChannel,
+        user: { ...user, external_user_id: user_id },
+        actionUrl: action_url,
+        data,
+        channels: internalChannels,
+        entityId: resolvedEntityId,
+        parentEntityId: resolvedParentEntityId,
+      });
+    } catch (enqueueErr) {
+      // Enqueue failed after the quota reservation was committed.
+      // Release all reservations for this notification (best-effort).
+      console.error(
+        `[notify] Enqueue failed for ${notificationId}, releasing quota reservations:`,
+        enqueueErr.message,
+      );
+      try {
+        await sql`
+          UPDATE quota_reservations SET status = 'released'
+          WHERE notification_id = ${notificationId} AND status = 'reserved'
+        `;
+        // Also decrement reserved counter in quota_usage for each released channel
+        for (const [ch, res] of quotaChannelResults.entries()) {
+          if (!res.blocked && quotaOwnerId) {
+            await sql`
+              UPDATE quota_usage
+              SET reserved = GREATEST(0, reserved - 1), updated_at = now()
+              WHERE app_id = ${appId} AND owner_id = ${quotaOwnerId}
+                AND channel = ${ch} AND period_start = ${res.periodStart}
+            `;
+          }
+        }
+      } catch (releaseErr) {
+        console.error(
+          "[notify] Failed to release quota after enqueue failure:",
+          releaseErr.message,
+        );
+      }
+      await sql`
+        UPDATE notifications SET status = 'failed' WHERE id = ${notificationId}
+      `;
+      throw enqueueErr;
+    }
 
     const publicEnqueuedChannels = [
       ...new Set(
@@ -593,11 +723,21 @@ async function notifyHandler(req, res) {
     ];
 
     // ─── 6. Return immediately ─────────────────────────────────────────────
-    return res.status(202).json({
+    const response = {
       success: true,
       notification_id: notificationId,
       channels_enqueued: publicEnqueuedChannels,
-    });
+    };
+
+    // Additive: include quota context when relevant
+    if (quotaBlockedChannels.length > 0) {
+      response.blocked_quota = quotaBlockedChannels.map((ch) => ({
+        channel: ch,
+        ...quotaChannelResults.get(ch),
+      }));
+    }
+
+    return res.status(202).json(response);
   } catch (err) {
     console.error("[notify] Error:", err);
     return res.status(500).json({ error: "Internal server error" });
