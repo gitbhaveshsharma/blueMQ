@@ -18,6 +18,8 @@ import ScheduleEditorPage from "./pages/ScheduleEditorPage";
 import AudiencesPage from "./pages/AudiencesPage";
 import AudienceDetailPage from "./pages/AudienceDetailPage";
 import QuotaProfilesPage from "./pages/QuotaProfilesPage";
+import QuotaOwnersPage from "./pages/QuotaOwnersPage";
+import OwnerDetailPage from "./pages/OwnerDetailPage";
 import WebhookSettingsPage from "./pages/WebhookSettingsPage";
 import UsageOverviewPage from "./pages/UsageOverviewPage";
 
@@ -61,6 +63,8 @@ export default function App() {
             <Route path="/audiences" element={<AudiencesPage />} />
             <Route path="/audiences/:audienceId" element={<AudienceDetailPage />} />
             <Route path="/quota/profiles" element={<QuotaProfilesPage />} />
+            <Route path="/quota/owners" element={<QuotaOwnersPage />} />
+            <Route path="/quota/owners/:ownerId" element={<OwnerDetailPage />} />
             <Route path="/webhooks" element={<WebhookSettingsPage />} />
             <Route path="/quota/usage" element={<UsageOverviewPage />} />
           </Route>

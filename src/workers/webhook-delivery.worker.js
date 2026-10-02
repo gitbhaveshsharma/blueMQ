@@ -252,10 +252,14 @@ async function enqueueWebhookEvent(sql, { appId, eventType, payload, notificatio
   if (webhookRes.rows.length === 0) return; // no webhook registered for this event
 
   const eventId = require("crypto").randomUUID();
-  await sql.query(
+  const result = await sql.query(
     `INSERT INTO webhook_deliveries
        (app_id, event_id, event_type, notification_id, payload, status, attempts, next_attempt_at)
-     VALUES ($1, $2, $3, $4, $5, 'pending', 0, now())`,
+     VALUES ($1, $2, $3, $4, $5, 'pending', 0, now())
+     ON CONFLICT (app_id, event_type,
+       COALESCE(notification_id, '00000000-0000-0000-0000-000000000000'::uuid))
+       WHERE status IN ('pending', 'delivered')
+     DO NOTHING`,
     [
       appId,
       eventId,
@@ -264,6 +268,11 @@ async function enqueueWebhookEvent(sql, { appId, eventType, payload, notificatio
       JSON.stringify(payload),
     ]
   );
+  if (result.rowCount === 0) {
+    console.log(
+      `[webhook-delivery] Dedup: skipped duplicate ${eventType} for notification ${notificationId}`
+    );
+  }
 }
 
 module.exports = { start, stop, enqueueWebhookEvent, MAX_ATTEMPTS, BACKOFF_SECONDS };

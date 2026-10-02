@@ -18,6 +18,7 @@ const { startWorkers } = require("./workers");
 const { bootstrapProviders } = require("./providers/bootstrap");
 const { authMiddleware } = require("./api/middlewares/auth");
 const { getProcessModeConfig } = require("./runtime/process-mode");
+const { getDb, warmPool } = require("./db");
 
 // ─── Routes ───
 const healthRoutes = require("./api/routes/health");
@@ -34,6 +35,7 @@ const whatsappTemplatesRoutes = require("./api/routes/whatsapp-templates");
 const templateAliasesRoutes = require("./api/routes/template-aliases");
 const quotaRoutes = require("./api/routes/quota");
 const webhookConfigRoutes = require("./api/routes/webhook-config");
+const entitiesRoutes = require("./api/routes/entities");
 const { attachWebSocketServer } = require("./ws");
 
 function createExpressApp() {
@@ -66,6 +68,7 @@ function registerRoutes(app) {
   app.use("/template-aliases", authMiddleware, templateAliasesRoutes);
   app.use("/quota", authMiddleware, quotaRoutes);
   app.use("/webhooks", authMiddleware, webhookConfigRoutes);
+  app.use("/entities", authMiddleware, entitiesRoutes);
 }
 
 function registerHttpHandlers(app) {
@@ -152,6 +155,17 @@ async function main() {
   );
 
   await bootstrapByMode(runtime);
+
+  // ── Part C: Pre-warm the PG pool ──────────────────────────────────────────
+  // Initialise getDb() here so the Pool + 2 min connections are established
+  // before the first HTTP request arrives. Neon cold-starts cost ~2s; this
+  // moves that cost to startup where it is invisible to callers.
+  try {
+    getDb(); // instantiates the Pool (min:2 sockets begin connecting)
+    await warmPool(); // blocks until the 2 sockets are auth'd + idle in pool
+  } catch (warmErr) {
+    console.warn("[server] Pool warm-up failed (non-fatal):", warmErr.message);
+  }
 
   if (runtime.runApi) {
     startApiServer();

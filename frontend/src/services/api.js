@@ -419,8 +419,8 @@ class ApiClient {
     return this.#request("PUT", `/quota/profiles/${id}`, { body: data });
   }
 
-  deleteQuotaProfile(id) {
-    return this.#request("DELETE", `/quota/profiles/${id}`);
+  deleteQuotaProfile(id, { reassign_to } = {}) {
+    return this.#request("DELETE", `/quota/profiles/${id}`, { params: { reassign_to } });
   }
 
   upsertProfileLimit(profileId, data) {
@@ -432,8 +432,19 @@ class ApiClient {
   }
 
   // ── Quota: Owners ──
-  getQuotaOwners() {
-    return this.#request("GET", "/quota/owners");
+  /**
+   * @param {object} opts
+   * @param {string} [opts.q]          — search owner_id or label
+   * @param {string} [opts.profile_id] — filter by profile
+   * @param {number} [opts.page]
+   * @param {number} [opts.limit]
+   */
+  getQuotaOwners({ q, profile_id, page = 1, limit = 20 } = {}) {
+    return this.#request("GET", "/quota/owners", { params: { q, profile_id, page, limit } });
+  }
+
+  getQuotaOwner(ownerId) {
+    return this.#request("GET", `/quota/owners/${encodeURIComponent(ownerId)}`);
   }
 
   upsertOwnerQuota(ownerId, data) {
@@ -442,6 +453,35 @@ class ApiClient {
 
   deleteOwnerQuota(ownerId) {
     return this.#request("DELETE", `/quota/owners/${encodeURIComponent(ownerId)}`);
+  }
+
+  bulkAssignOwners(data) {
+    return this.#request("POST", "/quota/owners/bulk", { body: data });
+  }
+
+  getOwnerBranches(ownerId) {
+    return this.#request("GET", `/quota/owners/${encodeURIComponent(ownerId)}/branches`);
+  }
+
+  // ── Quota: Owner-scoped (entities) ──
+  getEntityQuota(ownerId, { include } = {}) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/quota`, { params: { include } });
+  }
+
+  getEntityStats(ownerId, { from, to, channel, type, entity_id, group_by } = {}) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/stats`, {
+      params: { from, to, channel, type, entity_id, group_by },
+    });
+  }
+
+  getEntityNotifications(ownerId, { from, to, channel, status, type, entity_id, cursor, limit } = {}) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/notifications`, {
+      params: { from, to, channel, status, type, entity_id, cursor, limit },
+    });
+  }
+
+  getEntityNotification(ownerId, notificationId) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/notifications/${notificationId}`);
   }
 
   // ── Quota: Usage ──

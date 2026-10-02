@@ -798,25 +798,51 @@ If your app has any quota profiles or owner_quota rows, `entity_id` (or `parent_
 
 If only some channels exceed quota, the accepted channels are enqueued and the response includes `blocked_quota`. If all channels are blocked, `HTTP 429` is returned.
 
-### 21.4 Quota API
+### 21.4 Quota API (Dashboard / Admin)
+
+All routes require `x-api-key` and are scoped to the calling application.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/quota/profiles` | List profiles |
-| POST | `/quota/profiles` | Create profile |
-| PUT | `/quota/profiles/:id` | Update profile |
-| DELETE | `/quota/profiles/:id` | Delete profile |
-| POST | `/quota/profiles/:id/limits` | Upsert channel limit |
+| GET | `/quota/profiles` | List profiles, includes `owner_count` per profile |
+| POST | `/quota/profiles` | Create profile (`{ name, is_default }`) |
+| PUT | `/quota/profiles/:id` | Update profile (`{ name, is_default }`) |
+| DELETE | `/quota/profiles/:id` | Delete profile (409 if default; 409 if assigned owners unless `?reassign_to=<id>`) |
+| POST | `/quota/profiles/:id/limits` | Upsert channel limit (`{ channel, limit_count, period }`) |
 | DELETE | `/quota/profiles/:id/limits/:channel` | Remove channel limit |
-| GET | `/quota/owners` | List owner quotas |
-| PUT | `/quota/owners/:ownerId` | Upsert owner quota |
-| DELETE | `/quota/owners/:ownerId` | Remove owner quota |
-| GET | `/quota/usage` | Current period usage |
-| GET | `/quota/thresholds` | Recent threshold events |
+| GET | `/quota/owners` | List owners with search (`q`), pagination (`page`, `limit`), filter (`profile_id`), returns label & highest utilization |
+| GET | `/quota/owners/:ownerId` | Effective limits per channel with source (`override`, `profile`, `default_profile`, `none`), used/reserved/remaining/pct/status |
+| PUT | `/quota/owners/:ownerId` | Upsert owner quota (`{ profile_id, label, overrides }`) |
+| DELETE | `/quota/owners/:ownerId` | Remove owner quota assignment |
+| POST | `/quota/owners/bulk` | Bulk assign up to 500 owners (`{ owner_ids: [...], profile_id, overrides, label }`) in a single transaction |
+| GET | `/quota/owners/:ownerId/branches` | Per-branch (`entity_id`) channel usage for current period |
+| GET | `/quota/usage` | Current period usage counters |
+| GET | `/quota/thresholds` | Recent threshold alert events (80% / 100%) |
 
-### 21.5 Quota Timezone
+### 21.5 Owner-Scoped Read APIs (`/entities`)
+
+Customer-app read APIs for tenant portals (e.g. coaching center dashboards). Strictly scoped to the app of the API key and owner hierarchy (`parent_entity_id = ownerId` or fallback `entity_id = ownerId`).
+
+#### Endpoints
+- `GET /entities/:ownerId/quota` — Effective limits + period dates. Optional `?include=thresholds`. For unlimited channels, returns `sent_count` from `notification_logs`.
+- `GET /entities/:ownerId/stats` — Delivery stats. Parameters: `from`, `to`, `channel`, `type`, `entity_id`, `group_by=day|channel|type|branch`.
+- `GET /entities/:ownerId/notifications` — Cursor-paginated notifications (`limit` default 50, max 200). Filters: `from`, `to`, `channel`, `status`, `type`, `entity_id`, `cursor`.
+- `GET /entities/:ownerId/notifications/:id` — Single notification detail + delivery channel logs.
+
+#### Security & Whitelisting Rules
+These endpoints **never** expose:
+- Raw `notifications.data` JSONB
+- Recipient email addresses or phone numbers
+- Device push tokens (FCM/OneSignal)
+- Provider credentials or internal worker metadata
+
+**Whitelisted notification fields returned:**
+`id`, `type`, `title`, `message`, `action_url`, `status`, `entity_id`, `parent_entity_id`, `external_user_id`, `created_at`, `updated_at`.
+
+### 21.6 Quota Timezone
 
 Stored in `app_settings.quota_timezone` (default: `Asia/Kolkata`). Update via the settings API or directly in the database.
+
 
 ---
 

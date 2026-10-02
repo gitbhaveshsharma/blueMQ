@@ -564,7 +564,10 @@ async function releaseStaleReservations(sql) {
   try {
     await client.query("BEGIN");
 
-    const staleRes = await client.query(
+    // ── Sweep 1: notification is in a terminal state (delivered/partial/failed)
+    // but the reservation was never settled by the worker. Indicates the worker
+    // crashed after committing the notification status but before settling quota.
+    const terminalRes = await client.query(
       `SELECT qr.id, qr.app_id, qr.owner_id, qr.channel, qr.units, qr.period_start
        FROM quota_reservations qr
        JOIN notifications n ON n.id = qr.notification_id
@@ -576,7 +579,25 @@ async function releaseStaleReservations(sql) {
       [String(minutes)]
     );
 
-    for (const row of staleRes.rows) {
+    // ── Sweep 2: notification is still 'pending' past the timeout.
+    // This means the BullMQ job was evicted from Redis (OOM, restart) and the
+    // notification will never be processed. Release the reservation so the quota
+    // counter does not stay permanently inflated.
+    const orphanRes = await client.query(
+      `SELECT qr.id, qr.app_id, qr.owner_id, qr.channel, qr.units, qr.period_start
+       FROM quota_reservations qr
+       JOIN notifications n ON n.id = qr.notification_id
+       WHERE qr.status = 'reserved'
+         AND qr.created_at < now() - ($1 || ' minutes')::interval
+         AND n.status = 'pending'
+       FOR UPDATE OF qr SKIP LOCKED
+       LIMIT 200`,
+      [String(minutes)]
+    );
+
+    const allStale = [...terminalRes.rows, ...orphanRes.rows];
+
+    for (const row of allStale) {
       await client.query(
         `UPDATE quota_reservations SET status = 'released' WHERE id = $1`,
         [row.id]
@@ -588,6 +609,22 @@ async function releaseStaleReservations(sql) {
         [row.app_id, row.owner_id, row.channel, row.period_start, row.units]
       );
       count++;
+    }
+
+    // Mark orphaned notifications (still 'pending' past timeout) as failed
+    // so subsequent stale sweeps do not repeatedly find them.
+    if (orphanRes.rows.length > 0) {
+      const orphanNotifIds = [...new Set(orphanRes.rows.map((r) => r.notification_id || r.id))];
+      // We don't have notification_id on the row directly — use a joined update
+      await client.query(
+        `UPDATE notifications n
+         SET status = 'failed'
+         FROM quota_reservations qr
+         WHERE qr.notification_id = n.id
+           AND qr.id = ANY($1::uuid[])
+           AND n.status = 'pending'`,
+        [orphanRes.rows.map((r) => r.id)]
+      );
     }
 
     await client.query("COMMIT");
