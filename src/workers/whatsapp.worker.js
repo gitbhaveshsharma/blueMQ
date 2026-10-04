@@ -8,6 +8,7 @@ const { resolveWhatsAppSession } = require("../utils/whatsapp-session");
 const {
   inferCacheStatusFromMetaError,
   markCacheStatus,
+  summarizeWhatsAppTemplate,
 } = require("../utils/whatsapp-template");
 const { settleOnClient } = require("../utils/quota");
 const { _maybeFireNotificationFinal } = require("./base.worker");
@@ -54,6 +55,15 @@ function createWhatsAppWorker() {
       console.log(
         `[whatsapp] Processing ${notificationId} (attempt ${attemptNumber})`,
       );
+      console.info(
+        `[whatsapp] Payload summary ${JSON.stringify({
+          notification_id: notificationId,
+          app_id: appId,
+          entity_id: entityId || null,
+          parent_entity_id: parentEntityId || null,
+          ...summarizeWhatsAppTemplate({ templateName, language, parameters }),
+        })}`,
+      );
 
       const basePayload = {
         notificationId,
@@ -95,12 +105,17 @@ function createWhatsAppWorker() {
         result.provider = providerName || resolvedProvider.name || "unknown";
       } else {
         // ─── 1. Lookup active WhatsApp session for this entity ───
-        const { session, isInherited, resolvedEntityId } =
-          await resolveWhatsAppSession(sql, {
-            appId,
-            entityId,
-            parentEntityId,
-          });
+        const {
+          session,
+          isInherited,
+          resolvedEntityId,
+          fallbackUsed,
+          resolutionSource,
+        } = await resolveWhatsAppSession(sql, {
+          appId,
+          entityId,
+          parentEntityId,
+        });
 
         if (!session) {
           const reason = entityId
@@ -129,7 +144,11 @@ function createWhatsAppWorker() {
               [notificationId],
             );
             notifRow1 = upd1.rows[0];
-            await settleOnClient(dbClient1, { notificationId, channel, outcome: "released" });
+            await settleOnClient(dbClient1, {
+              notificationId,
+              channel,
+              outcome: "released",
+            });
             await dbClient1.query("COMMIT");
           } catch (txErr) {
             await dbClient1.query("ROLLBACK").catch(() => {});
@@ -139,8 +158,15 @@ function createWhatsAppWorker() {
           }
 
           if (notifRow1) {
-            await _maybeFireNotificationFinal(sql, notificationId, notifRow1).catch((e) =>
-              console.warn(`[whatsapp] notification.final check failed:`, e.message)
+            await _maybeFireNotificationFinal(
+              sql,
+              notificationId,
+              notifRow1,
+            ).catch((e) =>
+              console.warn(
+                `[whatsapp] notification.final check failed:`,
+                e.message,
+              ),
             );
           }
 
@@ -170,7 +196,11 @@ function createWhatsAppWorker() {
               [notificationId],
             );
             notifRow2 = upd2.rows[0];
-            await settleOnClient(dbClient2, { notificationId, channel, outcome: "released" });
+            await settleOnClient(dbClient2, {
+              notificationId,
+              channel,
+              outcome: "released",
+            });
             await dbClient2.query("COMMIT");
           } catch (txErr) {
             await dbClient2.query("ROLLBACK").catch(() => {});
@@ -180,8 +210,15 @@ function createWhatsAppWorker() {
           }
 
           if (notifRow2) {
-            await _maybeFireNotificationFinal(sql, notificationId, notifRow2).catch((e) =>
-              console.warn(`[whatsapp] notification.final check failed:`, e.message)
+            await _maybeFireNotificationFinal(
+              sql,
+              notificationId,
+              notifRow2,
+            ).catch((e) =>
+              console.warn(
+                `[whatsapp] notification.final check failed:`,
+                e.message,
+              ),
             );
           }
 
@@ -208,7 +245,11 @@ function createWhatsAppWorker() {
               [notificationId],
             );
             notifRow3 = upd3.rows[0];
-            await settleOnClient(dbClient3, { notificationId, channel, outcome: "released" });
+            await settleOnClient(dbClient3, {
+              notificationId,
+              channel,
+              outcome: "released",
+            });
             await dbClient3.query("COMMIT");
           } catch (txErr) {
             await dbClient3.query("ROLLBACK").catch(() => {});
@@ -218,8 +259,15 @@ function createWhatsAppWorker() {
           }
 
           if (notifRow3) {
-            await _maybeFireNotificationFinal(sql, notificationId, notifRow3).catch((e) =>
-              console.warn(`[whatsapp] notification.final check failed:`, e.message)
+            await _maybeFireNotificationFinal(
+              sql,
+              notificationId,
+              notifRow3,
+            ).catch((e) =>
+              console.warn(
+                `[whatsapp] notification.final check failed:`,
+                e.message,
+              ),
             );
           }
 
@@ -240,8 +288,14 @@ function createWhatsAppWorker() {
             : `, fallback parent ${resolvedEntityId}`
           : "";
 
+        if (fallbackUsed) {
+          console.warn(
+            `[whatsapp] Using app fallback session "${resolvedEntityId}" for ${notificationId} (requested entity: ${requestLabel})`,
+          );
+        }
+
         console.log(
-          `[whatsapp] Using Meta provider for ${notificationId} (entity: ${requestLabel}${inheritanceLabel})`,
+          `[whatsapp] Using Meta provider for ${notificationId} (entity: ${requestLabel}${inheritanceLabel}, source: ${resolutionSource || "unknown"})`,
         );
 
         result = await resolvedProvider.sendWhatsApp(metaPayload);
@@ -279,7 +333,13 @@ function createWhatsAppWorker() {
             `INSERT INTO notification_logs
                (notification_id, channel, status, provider, provider_message_id, attempt_number)
              VALUES ($1, $2, 'sent', $3, $4, $5)`,
-            [notificationId, channel, result.provider, result.providerMessageId || null, attemptNumber],
+            [
+              notificationId,
+              channel,
+              result.provider,
+              result.providerMessageId || null,
+              attemptNumber,
+            ],
           );
           const updS = await dbClientS.query(
             `UPDATE notifications
@@ -293,7 +353,11 @@ function createWhatsAppWorker() {
             [notificationId],
           );
           notifRowS = updS.rows[0];
-          await settleOnClient(dbClientS, { notificationId, channel, outcome: "consumed" });
+          await settleOnClient(dbClientS, {
+            notificationId,
+            channel,
+            outcome: "consumed",
+          });
           await dbClientS.query("COMMIT");
         } catch (txErr) {
           await dbClientS.query("ROLLBACK").catch(() => {});
@@ -302,11 +366,20 @@ function createWhatsAppWorker() {
           dbClientS.release();
         }
         if (notifRowS) {
-          await _maybeFireNotificationFinal(sql, notificationId, notifRowS).catch((e) =>
-            console.warn(`[whatsapp] notification.final check failed:`, e.message)
+          await _maybeFireNotificationFinal(
+            sql,
+            notificationId,
+            notifRowS,
+          ).catch((e) =>
+            console.warn(
+              `[whatsapp] notification.final check failed:`,
+              e.message,
+            ),
           );
         }
-        console.log(`[whatsapp] ✅ ${notificationId} sent via ${result.provider}`);
+        console.log(
+          `[whatsapp] ✅ ${notificationId} sent via ${result.provider}`,
+        );
       } else {
         if (result.retryable === false) {
           // Terminal: non-retryable failure — settle as released
@@ -318,7 +391,13 @@ function createWhatsAppWorker() {
               `INSERT INTO notification_logs
                  (notification_id, channel, status, provider, error, attempt_number)
                VALUES ($1, $2, 'failed', $3, $4, $5)`,
-              [notificationId, channel, result.provider || "unknown", result.error || "Unknown error", attemptNumber],
+              [
+                notificationId,
+                channel,
+                result.provider || "unknown",
+                result.error || "Unknown error",
+                attemptNumber,
+              ],
             );
             const updF = await dbClientF.query(
               `UPDATE notifications SET status = 'failed'
@@ -327,7 +406,11 @@ function createWhatsAppWorker() {
               [notificationId],
             );
             notifRowF = updF.rows[0];
-            await settleOnClient(dbClientF, { notificationId, channel, outcome: "released" });
+            await settleOnClient(dbClientF, {
+              notificationId,
+              channel,
+              outcome: "released",
+            });
             await dbClientF.query("COMMIT");
           } catch (txErr) {
             await dbClientF.query("ROLLBACK").catch(() => {});
@@ -336,8 +419,15 @@ function createWhatsAppWorker() {
             dbClientF.release();
           }
           if (notifRowF) {
-            await _maybeFireNotificationFinal(sql, notificationId, notifRowF).catch((e) =>
-              console.warn(`[whatsapp] notification.final check failed:`, e.message)
+            await _maybeFireNotificationFinal(
+              sql,
+              notificationId,
+              notifRowF,
+            ).catch((e) =>
+              console.warn(
+                `[whatsapp] notification.final check failed:`,
+                e.message,
+              ),
             );
           }
           return;
@@ -351,7 +441,9 @@ function createWhatsAppWorker() {
             (${notificationId}, ${channel}, 'failed', ${result.provider || "unknown"},
              ${result.error || "Unknown error"}, ${attemptNumber})
         `;
-        throw new Error(result.error || "provider returned failure for whatsapp");
+        throw new Error(
+          result.error || "provider returned failure for whatsapp",
+        );
       }
     },
     {
@@ -406,8 +498,15 @@ function createWhatsAppWorker() {
           dbClientPF.release();
         }
         if (notifRowPF) {
-          await _maybeFireNotificationFinal(sql, job.data.notificationId, notifRowPF).catch((e) =>
-            console.warn(`[whatsapp] notification.final check failed:`, e.message)
+          await _maybeFireNotificationFinal(
+            sql,
+            job.data.notificationId,
+            notifRowPF,
+          ).catch((e) =>
+            console.warn(
+              `[whatsapp] notification.final check failed:`,
+              e.message,
+            ),
           );
         }
         console.error(

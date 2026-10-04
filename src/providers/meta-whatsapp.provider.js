@@ -152,6 +152,9 @@ class MetaWhatsAppProvider extends INotificationProvider {
     const endpoint = this._buildEndpoint(metaPhoneNumberId);
     const headers = this._buildHeaders(metaApiKey);
     const useTemplate = Boolean(templateName && language);
+    console.info(
+      `[meta-whatsapp] Request mode=${useTemplate ? "template" : "text"} template=${templateName || "none"} language=${language || "none"} parameter_components=${Array.isArray(parameters) ? parameters.length : 0}`,
+    );
     const requestBody = useTemplate
       ? this._buildTemplatePayload(formattedPhone, {
           templateName,

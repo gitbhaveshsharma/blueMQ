@@ -38,6 +38,7 @@ router.post("/sessions", async (req, res) => {
       entity_id,
       entity_name,
       parent_entity_id,
+      is_fallback = false,
       connection_type,
       meta_api_key,
       meta_phone_number_id,
@@ -80,54 +81,63 @@ router.post("/sessions", async (req, res) => {
 
     const sql = getDb();
     const sessionName = buildSessionName(appId, normalizedEntityId);
-
-    await sql`
-      INSERT INTO whatsapp_sessions (
-        app_id,
-        entity_id,
-        parent_entity_id,
-        waha_session,
-        status,
-        qr_code,
-        connection_type,
-        meta_api_key,
-        meta_phone_number_id,
-        meta_business_account_id,
-        connected_at,
-        disconnected_at
-      )
-      VALUES (
-        ${appId},
-        ${normalizedEntityId},
-        ${normalizedParentEntityId || null},
-        ${sessionName},
-        'active',
-        NULL,
-        'meta',
-        ${meta_api_key},
-        ${meta_phone_number_id},
-        ${meta_business_account_id || null},
-        now(),
-        NULL
-      )
-      ON CONFLICT (app_id, entity_id) DO UPDATE SET
-        parent_entity_id = EXCLUDED.parent_entity_id,
-        waha_session = EXCLUDED.waha_session,
-        status = 'active',
-        qr_code = NULL,
-        connection_type = 'meta',
-        meta_api_key = EXCLUDED.meta_api_key,
-        meta_phone_number_id = EXCLUDED.meta_phone_number_id,
-        meta_business_account_id = EXCLUDED.meta_business_account_id,
-        connected_at = now(),
-        disconnected_at = NULL
-    `;
+    const fallback = Boolean(is_fallback);
+    const client = await sql.raw.connect();
+    try {
+      await client.query("BEGIN");
+      if (fallback) {
+        await client.query(
+          `UPDATE whatsapp_sessions
+           SET is_fallback = false
+           WHERE app_id = $1 AND entity_id <> $2 AND is_fallback = true`,
+          [appId, normalizedEntityId],
+        );
+      }
+      await client.query(
+        `INSERT INTO whatsapp_sessions (
+           app_id, entity_id, parent_entity_id, is_fallback, waha_session,
+           status, qr_code, connection_type, meta_api_key,
+           meta_phone_number_id, meta_business_account_id, connected_at,
+           disconnected_at
+         )
+         VALUES ($1, $2, $3, $4, $5, 'active', NULL, 'meta', $6, $7, $8, now(), NULL)
+         ON CONFLICT (app_id, entity_id) DO UPDATE SET
+           parent_entity_id = EXCLUDED.parent_entity_id,
+           is_fallback = EXCLUDED.is_fallback,
+           waha_session = EXCLUDED.waha_session,
+           status = 'active',
+           qr_code = NULL,
+           connection_type = 'meta',
+           meta_api_key = EXCLUDED.meta_api_key,
+           meta_phone_number_id = EXCLUDED.meta_phone_number_id,
+           meta_business_account_id = EXCLUDED.meta_business_account_id,
+           connected_at = now(),
+           disconnected_at = NULL`,
+        [
+          appId,
+          normalizedEntityId,
+          normalizedParentEntityId || null,
+          fallback,
+          sessionName,
+          meta_api_key,
+          meta_phone_number_id,
+          meta_business_account_id || null,
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (txErr) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
+    }
 
     return res.status(201).json({
       success: true,
       entity_id: normalizedEntityId,
       resolved_entity_id: normalizedEntityId,
       parent_entity_id: normalizedParentEntityId || null,
+      is_fallback: fallback,
       is_inherited: false,
       entity_name: entity_name || normalizedEntityId,
       status: "active",
@@ -138,6 +148,66 @@ router.post("/sessions", async (req, res) => {
     });
   } catch (err) {
     console.error("[whatsapp-sessions] POST error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// PATCH /whatsapp/sessions/:entity_id/fallback
+// Mark or unmark an existing Meta session as the app fallback.
+// ─────────────────────────────────────────────────────────────
+router.patch("/sessions/:entity_id/fallback", async (req, res) => {
+  try {
+    const appId = req.appId;
+    const entityId = normalizeEntityId(req.params.entity_id);
+    const isFallback = req.body?.is_fallback === true;
+
+    if (!entityId) {
+      return res.status(400).json({ error: "Required: entity_id" });
+    }
+
+    const sql = getDb();
+    const client = await sql.raw.connect();
+    let row;
+    try {
+      await client.query("BEGIN");
+      if (isFallback) {
+        await client.query(
+          `UPDATE whatsapp_sessions
+           SET is_fallback = false
+           WHERE app_id = $1 AND entity_id <> $2 AND is_fallback = true`,
+          [appId, entityId],
+        );
+      }
+
+      const result = await client.query(
+        `UPDATE whatsapp_sessions
+         SET is_fallback = $3
+         WHERE app_id = $1
+           AND entity_id = $2
+           AND connection_type = 'meta'
+         RETURNING entity_id, parent_entity_id, is_fallback, status,
+                   connection_type`,
+        [appId, entityId, isFallback],
+      );
+      row = result.rows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        return res
+          .status(404)
+          .json({ error: "Meta WhatsApp session not found" });
+      }
+      await client.query("COMMIT");
+    } catch (txErr) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    return res.json({ success: true, ...row });
+  } catch (err) {
+    console.error("[whatsapp-sessions] PATCH fallback error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -158,6 +228,7 @@ router.get("/sessions", async (req, res) => {
           SELECT
             entity_id,
             parent_entity_id,
+            is_fallback,
             waha_session AS session_name,
             waha_session,
             status,
@@ -178,6 +249,7 @@ router.get("/sessions", async (req, res) => {
           SELECT
             entity_id,
             parent_entity_id,
+            is_fallback,
             waha_session AS session_name,
             waha_session,
             status,
@@ -216,11 +288,12 @@ router.get("/sessions/:entity_id", async (req, res) => {
     const parentEntityId = normalizeEntityId(req.query.parent_entity_id);
     const sql = getDb();
 
-    const { session, isInherited } = await resolveWhatsAppSession(sql, {
-      appId,
-      entityId: entity_id,
-      parentEntityId,
-    });
+    const { session, isInherited, fallbackUsed, resolutionSource } =
+      await resolveWhatsAppSession(sql, {
+        appId,
+        entityId: entity_id,
+        parentEntityId,
+      });
 
     if (!session) {
       return res.json({ success: true, status: "not_configured" });
@@ -238,6 +311,9 @@ router.get("/sessions/:entity_id", async (req, res) => {
       entity_id: session.entity_id,
       resolved_entity_id: session.entity_id,
       is_inherited: isInherited,
+      fallback_used: Boolean(fallbackUsed),
+      resolution_source: resolutionSource,
+      is_fallback: Boolean(session.is_fallback),
       parent_entity_id: session.parent_entity_id || parentEntityId || null,
       session_name: session.session_name,
       waha_session: session.waha_session,
@@ -320,11 +396,12 @@ router.post("/sessions/:entity_id/test-message", async (req, res) => {
 
     const sql = getDb();
 
-    const { session, isInherited } = await resolveWhatsAppSession(sql, {
-      appId,
-      entityId: entity_id,
-      parentEntityId,
-    });
+    const { session, isInherited, fallbackUsed, resolutionSource } =
+      await resolveWhatsAppSession(sql, {
+        appId,
+        entityId: entity_id,
+        parentEntityId,
+      });
 
     if (!session) {
       return res.status(404).json({ error: "Session not found" });
@@ -366,6 +443,8 @@ router.post("/sessions/:entity_id/test-message", async (req, res) => {
       resolved_entity_id: session.entity_id,
       parent_entity_id: session.parent_entity_id || parentEntityId || null,
       is_inherited: isInherited,
+      fallback_used: Boolean(fallbackUsed),
+      resolution_source: resolutionSource,
       provider: "meta-whatsapp",
       message_id: result.providerMessageId,
     });

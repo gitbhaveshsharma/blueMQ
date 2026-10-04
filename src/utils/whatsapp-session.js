@@ -11,6 +11,7 @@ async function findWhatsAppSessionByEntity(sql, appId, entityId) {
       SELECT
         entity_id,
         parent_entity_id,
+        is_fallback,
         waha_session AS session_name,
         waha_session,
         phone_number,
@@ -34,45 +35,95 @@ async function findWhatsAppSessionByEntity(sql, appId, entityId) {
   return result.rows[0] ?? null;
 }
 
+async function findWhatsAppFallbackSession(sql, appId) {
+  const result = await sql.query(
+    `
+      SELECT
+        entity_id,
+        parent_entity_id,
+        is_fallback,
+        waha_session AS session_name,
+        waha_session,
+        phone_number,
+        status,
+        qr_code,
+        connected_at,
+        disconnected_at,
+        created_at,
+        connection_type,
+        meta_api_key,
+        meta_phone_number_id,
+        meta_business_account_id
+      FROM whatsapp_sessions
+      WHERE app_id = $1
+        AND is_fallback = true
+        AND status = 'active'
+        AND connection_type = 'meta'
+      LIMIT 1
+    `,
+    [appId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
 async function resolveWhatsAppSession(
   sql,
   { appId, entityId, parentEntityId },
 ) {
-  const directSession = await findWhatsAppSessionByEntity(sql, appId, entityId);
-  if (directSession && directSession.status === "active") {
-    return {
-      session: directSession,
-      resolvedEntityId: directSession.entity_id,
-      isInherited: false,
-    };
-  }
+  const requestedEntityId = normalizeEntityId(entityId);
+  const explicitParentEntityId = normalizeEntityId(parentEntityId);
+  const candidates = [requestedEntityId, explicitParentEntityId];
+  const visited = new Set();
 
-  const normalizedParentEntityId = normalizeEntityId(parentEntityId);
-  if (normalizedParentEntityId) {
-    const parentSession = await findWhatsAppSessionByEntity(
+  while (candidates.length > 0) {
+    const candidate = candidates.shift();
+    if (!candidate || visited.has(candidate)) continue;
+    visited.add(candidate);
+
+    const candidateSession = await findWhatsAppSessionByEntity(
       sql,
       appId,
-      normalizedParentEntityId,
+      candidate,
     );
 
-    if (parentSession && parentSession.status === "active") {
+    if (candidateSession?.status === "active") {
       return {
-        session: parentSession,
-        resolvedEntityId: parentSession.entity_id,
-        isInherited: true,
+        session: candidateSession,
+        resolvedEntityId: candidateSession.entity_id,
+        isInherited: candidate !== requestedEntityId,
+        resolutionSource: candidate === requestedEntityId ? "direct" : "parent",
       };
+    }
+
+    if (candidateSession?.parent_entity_id) {
+      candidates.push(candidateSession.parent_entity_id);
     }
   }
 
+  const fallbackSession = await findWhatsAppFallbackSession(sql, appId);
+  if (fallbackSession) {
+    return {
+      session: fallbackSession,
+      resolvedEntityId: fallbackSession.entity_id,
+      isInherited: true,
+      fallbackUsed: true,
+      resolutionSource: "app_fallback",
+    };
+  }
+
   return {
-    session: directSession,
-    resolvedEntityId: directSession?.entity_id ?? null,
+    session: null,
+    resolvedEntityId: null,
     isInherited: false,
+    fallbackUsed: false,
+    resolutionSource: null,
   };
 }
 
 module.exports = {
   normalizeEntityId,
   findWhatsAppSessionByEntity,
+  findWhatsAppFallbackSession,
   resolveWhatsAppSession,
 };

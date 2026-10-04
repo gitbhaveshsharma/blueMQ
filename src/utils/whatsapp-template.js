@@ -160,7 +160,12 @@ function parseComponentsPayload(value) {
   }
 }
 
-function buildComponentsFromPlainText({ headerText, body, footerText, buttons }) {
+function buildComponentsFromPlainText({
+  headerText,
+  body,
+  footerText,
+  buttons,
+}) {
   const components = [];
   if (headerText && String(headerText).trim()) {
     components.push({
@@ -201,6 +206,92 @@ function positionalValues(variables) {
   }
   keys.sort((a, b) => Number(a) - Number(b));
   return keys.map((k) => String(variables[k] ?? ""));
+}
+
+function normalizeVariableKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function exampleValuesForComponent(component) {
+  const example = component?.example;
+  if (!example || typeof example !== "object") return [];
+
+  const candidates = [
+    example[`${String(component.type || "").toLowerCase()}_text`],
+    example.body_text,
+    example.header_text,
+    example.button_text,
+  ];
+  const values = candidates.find((value) => Array.isArray(value));
+  if (!Array.isArray(values)) return [];
+  const firstRow = Array.isArray(values[0]) ? values[0] : values;
+  return firstRow.map((value) => String(value ?? "").trim());
+}
+
+function exampleVariableMappings(components) {
+  const mappings = new Map();
+
+  for (const component of components || []) {
+    if (!component?.text) continue;
+    const indexes = [...new Set(placeholderIndexes(component.text))];
+    const names = exampleValuesForComponent(component);
+    indexes.forEach((index, position) => {
+      const name = names[position];
+      if (name) mappings.set(index, name);
+    });
+  }
+
+  return mappings;
+}
+
+function normalizeWhatsAppVariables(components, variables) {
+  const input = variables && typeof variables === "object" ? variables : {};
+  const mappings = exampleVariableMappings(components);
+  const namedValues = new Map(
+    Object.entries(input).map(([key, value]) => [
+      normalizeVariableKey(key),
+      value,
+    ]),
+  );
+  const explicitValues = positionalValues(input);
+  const indexes = [
+    ...new Set(
+      (components || []).flatMap((component) =>
+        placeholderIndexes(component?.text),
+      ),
+    ),
+  ].sort((a, b) => a - b);
+  const highestIndex = Math.max(
+    indexes[indexes.length - 1] || 0,
+    explicitValues.length,
+  );
+  if (highestIndex === 0) return { variables: input, missing: [] };
+
+  const whatsapp = Array.from({ length: highestIndex }, (_, offset) => {
+    const index = offset + 1;
+    if (explicitValues[offset] !== undefined) {
+      return String(explicitValues[offset] ?? "");
+    }
+    const mappedName = mappings.get(index);
+    return mappedName
+      ? String(namedValues.get(normalizeVariableKey(mappedName)) ?? "")
+      : "";
+  });
+
+  const missing = indexes
+    .filter((index) => !String(whatsapp[index - 1] ?? "").trim())
+    .map((index) => ({
+      index,
+      variable: mappings.get(index) || null,
+    }));
+
+  return {
+    variables: { ...input, whatsapp },
+    missing,
+  };
 }
 
 function parametersForPlaceholders(text, valuesByIndex) {
@@ -305,11 +396,7 @@ function componentsEqual(a, b) {
 function inferCacheStatusFromMetaError(errorCode, message) {
   const msg = String(message || "").toLowerCase();
   const code = Number(errorCode);
-  if (
-    code === 132015 ||
-    msg.includes("paused") ||
-    msg.includes("disabled")
-  ) {
+  if (code === 132015 || msg.includes("paused") || msg.includes("disabled")) {
     return "PAUSED";
   }
   if (
@@ -338,6 +425,7 @@ async function resolveMetaCredentials(appId, entityId) {
       WHERE app_id = ${appId}
         AND entity_id = ${entityId}
         AND status = 'active'
+        AND connection_type = 'meta'
       LIMIT 1
     `;
   }
@@ -352,9 +440,29 @@ async function resolveMetaCredentials(appId, entityId) {
       FROM whatsapp_sessions
       WHERE app_id = ${appId}
         AND status = 'active'
-      ORDER BY created_at ASC
+        AND connection_type = 'meta'
+        AND is_fallback = true
       LIMIT 1
     `;
+  }
+
+  if (!rows || rows.length === 0) {
+    rows = await sql`
+      SELECT
+        entity_id,
+        meta_api_key,
+        meta_business_account_id,
+        meta_phone_number_id
+      FROM whatsapp_sessions
+      WHERE app_id = ${appId}
+        AND status = 'active'
+        AND connection_type = 'meta'
+      ORDER BY created_at ASC
+      LIMIT 2
+    `;
+    if (rows.length > 1) {
+      rows = [];
+    }
   }
 
   if (!rows || rows.length === 0) {
@@ -364,26 +472,28 @@ async function resolveMetaCredentials(appId, entityId) {
   return rows[0];
 }
 
-async function countActiveWhatsAppSessions(appId) {
+async function hasAppFallbackSession(appId) {
   const sql = getDb();
   const rows = await sql`
-    SELECT COUNT(*)::int AS count
+    SELECT 1
     FROM whatsapp_sessions
     WHERE app_id = ${appId}
       AND status = 'active'
       AND connection_type = 'meta'
+      AND is_fallback = true
+    LIMIT 1
   `;
-  return rows[0]?.count || 0;
+  return rows.length > 0;
 }
 
 async function resolveSessionForTemplates(appId, entityId) {
   const activeCount = await countActiveWhatsAppSessions(appId);
-  if (activeCount > 1 && !entityId) {
+  if (activeCount > 1 && !entityId && !(await hasAppFallbackSession(appId))) {
     return {
       error: {
         status: 400,
         message:
-          "entity_id is required when multiple WhatsApp sessions exist. Pick a session and retry.",
+          "entity_id is required when multiple WhatsApp sessions exist and no app fallback is configured. Pick a session or configure a fallback.",
       },
     };
   }
@@ -394,7 +504,7 @@ async function resolveSessionForTemplates(appId, entityId) {
       error: {
         status: 404,
         message:
-          "No active WhatsApp session found. Configure a WhatsApp session first.",
+          "No active WhatsApp session found. Configure an entity session or an app fallback session first.",
       },
     };
   }
@@ -413,6 +523,18 @@ async function resolveSessionForTemplates(appId, entityId) {
     entityId: creds.entity_id,
     activeCount,
   };
+}
+
+async function countActiveWhatsAppSessions(appId) {
+  const sql = getDb();
+  const rows = await sql`
+    SELECT COUNT(*)::int AS count
+    FROM whatsapp_sessions
+    WHERE app_id = ${appId}
+      AND status = 'active'
+      AND connection_type = 'meta'
+  `;
+  return rows[0]?.count || 0;
 }
 
 function graphUrl(path) {
@@ -528,7 +650,13 @@ async function listLiveTemplates({ creds, name, status, limit }) {
   return { templates: (data?.data || []).map(mapMetaTemplate) };
 }
 
-async function createMessageTemplate({ creds, name, language, category, components }) {
+async function createMessageTemplate({
+  creds,
+  name,
+  language,
+  category,
+  components,
+}) {
   const { data, error } = await graphRequest({
     method: "post",
     path: `${creds.meta_business_account_id}/message_templates`,
@@ -634,20 +762,28 @@ function shouldUpdateCache(existing, incoming) {
 async function listCachedTemplates({ appId, entityId, name }) {
   const sql = getDb();
   if (entityId && name) {
+    const entities = await resolveTemplateEntityCandidates(sql, {
+      appId,
+      entityId,
+    });
     return sql`
       SELECT * FROM whatsapp_meta_templates
       WHERE app_id = ${appId}
-        AND entity_id = ${entityId}
+        AND entity_id = ANY(${entities})
         AND name = ${name}
-      ORDER BY language ASC
+      ORDER BY array_position(${entities}, entity_id), language ASC
     `;
   }
   if (entityId) {
+    const entities = await resolveTemplateEntityCandidates(sql, {
+      appId,
+      entityId,
+    });
     return sql`
       SELECT * FROM whatsapp_meta_templates
       WHERE app_id = ${appId}
-        AND entity_id = ${entityId}
-      ORDER BY name ASC, language ASC
+        AND entity_id = ANY(${entities})
+      ORDER BY array_position(${entities}, entity_id), name ASC, language ASC
     `;
   }
   if (name) {
@@ -665,6 +801,28 @@ async function listCachedTemplates({ appId, entityId, name }) {
   `;
 }
 
+async function resolveTemplateEntityCandidates(
+  sql,
+  { appId, entityId, parentEntityId },
+) {
+  const entities = [entityId, parentEntityId]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const fallbackRows = await sql`
+    SELECT entity_id
+    FROM whatsapp_sessions
+    WHERE app_id = ${appId}
+      AND is_fallback = true
+      AND status = 'active'
+      AND connection_type = 'meta'
+    LIMIT 1
+  `;
+  if (fallbackRows[0]?.entity_id) {
+    entities.push(fallbackRows[0].entity_id);
+  }
+  return [...new Set(entities)];
+}
+
 async function findCachedSendableTemplate({
   appId,
   entityId,
@@ -673,7 +831,11 @@ async function findCachedSendableTemplate({
   language,
 }) {
   const sql = getDb();
-  const entityCandidates = [entityId, parentEntityId].filter(Boolean);
+  const entityCandidates = await resolveTemplateEntityCandidates(sql, {
+    appId,
+    entityId,
+    parentEntityId,
+  });
 
   for (const entity of entityCandidates) {
     const rows = language
@@ -799,6 +961,7 @@ function buildWhatsAppSendTemplate({ cacheRow, type, variables, fallback }) {
   if (cacheRow && isSendableStatus(cacheRow.status)) {
     const components = normalizeComponents(cacheRow.components);
     const preview = extractPreview(components);
+    const normalized = normalizeWhatsAppVariables(components, variables);
     return {
       title: preview.headerText || cacheRow.name,
       body: preview.bodyText || type,
@@ -807,10 +970,54 @@ function buildWhatsAppSendTemplate({ cacheRow, type, variables, fallback }) {
       actionUrl: null,
       templateName: cacheRow.name,
       language: cacheRow.language,
-      parameters: buildTemplateSendComponents(components, variables),
+      parameters: buildTemplateSendComponents(components, normalized.variables),
+      missingVariables: normalized.missing,
     };
   }
   return fallback;
+}
+
+function summarizeWhatsAppVariables(variables) {
+  const safeVariables =
+    variables && typeof variables === "object" ? variables : {};
+  const whatsappValues = Array.isArray(safeVariables.whatsapp)
+    ? safeVariables.whatsapp
+    : [];
+
+  return {
+    keys: Object.keys(safeVariables).sort(),
+    whatsapp_count: whatsappValues.length,
+    whatsapp_non_empty: whatsappValues.filter((value) =>
+      String(value ?? "").trim(),
+    ).length,
+    whatsapp_language:
+      safeVariables.whatsapp_language || safeVariables.language || null,
+  };
+}
+
+function summarizeWhatsAppTemplate(template) {
+  const parameters = Array.isArray(template?.parameters)
+    ? template.parameters
+    : [];
+  return {
+    template_name: template?.templateName || null,
+    language: template?.language || null,
+    parameter_components: parameters.map((component) => ({
+      type: component?.type || null,
+      parameter_count: Array.isArray(component?.parameters)
+        ? component.parameters.length
+        : 0,
+    })),
+    parameter_count: parameters.reduce(
+      (total, component) =>
+        total +
+        (Array.isArray(component?.parameters)
+          ? component.parameters.length
+          : 0),
+      0,
+    ),
+    missing_variables: template?.missingVariables || [],
+  };
 }
 
 function presentCacheRow(row) {
@@ -848,6 +1055,8 @@ module.exports = {
   buildComponentsFromPlainText,
   positionalValues,
   buildTemplateSendComponents,
+  normalizeWhatsAppVariables,
+  exampleVariableMappings,
   isSendableStatus,
   inferCacheStatusFromMetaError,
   resolveMetaCredentials,
@@ -859,10 +1068,13 @@ module.exports = {
   upsertCacheRow,
   toCacheRow,
   listCachedTemplates,
+  resolveTemplateEntityCandidates,
   findCachedSendableTemplate,
   markCacheStatus,
   syncMetaTemplates,
   presentCacheRow,
   buildWhatsAppSendTemplate,
+  summarizeWhatsAppVariables,
+  summarizeWhatsAppTemplate,
   formatMetaAxiosError,
 };

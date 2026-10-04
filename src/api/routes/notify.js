@@ -19,6 +19,8 @@ const { getAppProvider } = require("../../providers/per-app-factory");
 const {
   findCachedSendableTemplate,
   buildWhatsAppSendTemplate,
+  summarizeWhatsAppVariables,
+  summarizeWhatsAppTemplate,
 } = require("../../utils/whatsapp-template");
 const { resolveTemplateAlias } = require("../../utils/template-alias");
 const {
@@ -133,7 +135,8 @@ async function prepareTemplates({
   const whatsappTemplateName = resolvedTypeByChannel.whatsapp || type;
   let whatsappCache = null;
   if (channels.includes("whatsapp")) {
-    const language = variables?.language || variables?.whatsapp_language || null;
+    const language =
+      variables?.language || variables?.whatsapp_language || null;
     whatsappCache = await findCachedSendableTemplate({
       appId,
       entityId,
@@ -152,12 +155,23 @@ async function prepareTemplates({
         variables,
         fallback: {
           title: variables?.title || type.replace(/_/g, " "),
-          body: variables?.body || variables?.message || `Notification: ${type}`,
+          body:
+            variables?.body || variables?.message || `Notification: ${type}`,
           bodyFormat: "text",
           ctaText: variables?.cta_text || null,
           actionUrl: variables?.cta_url || null,
         },
       });
+      console.info(
+        `[notify] WhatsApp prepared ${JSON.stringify({
+          app_id: appId,
+          type,
+          entity_id: entityId || null,
+          parent_entity_id: parentEntityId || null,
+          ...summarizeWhatsAppVariables(variables),
+          ...summarizeWhatsAppTemplate(templateMap[channel]),
+        })}`,
+      );
       continue;
     }
 
@@ -167,19 +181,20 @@ async function prepareTemplates({
     );
     templateMap[channel] = selected
       ? {
-        title: renderTemplate(selected.title, variables),
-        body: renderTemplate(selected.body, variables),
-        bodyFormat: selected.body_format || "text",
-        ctaText: renderTemplate(selected.cta_text, variables),
-        actionUrl: renderTemplate(selected.cta_url, variables),
-      }
+          title: renderTemplate(selected.title, variables),
+          body: renderTemplate(selected.body, variables),
+          bodyFormat: selected.body_format || "text",
+          ctaText: renderTemplate(selected.cta_text, variables),
+          actionUrl: renderTemplate(selected.cta_url, variables),
+        }
       : {
-        title: variables?.title || type.replace(/_/g, " "),
-        body: variables?.body || variables?.message || `Notification: ${type}`,
-        bodyFormat: "text",
-        ctaText: variables?.cta_text || null,
-        actionUrl: variables?.cta_url || null,
-      };
+          title: variables?.title || type.replace(/_/g, " "),
+          body:
+            variables?.body || variables?.message || `Notification: ${type}`,
+          bodyFormat: "text",
+          ctaText: variables?.cta_text || null,
+          actionUrl: variables?.cta_url || null,
+        };
   }
 
   return { templateMap, resolvedChannels: channels };
@@ -525,6 +540,17 @@ async function notifyHandler(req, res) {
     prepared = await prepared;
     const { templateMap, resolvedChannels } = prepared;
 
+    const missingWhatsAppVariables =
+      templateMap.whatsapp?.missingVariables || [];
+    if (missingWhatsAppVariables.length > 0) {
+      return res.status(400).json({
+        error: "Missing WhatsApp template variables",
+        template: templateMap.whatsapp.templateName,
+        language: templateMap.whatsapp.language,
+        missing_variables: missingWhatsAppVariables,
+      });
+    }
+
     // ─── 3b. Automatic burst deduplication (when caller omitted key) ───────
     if (!resolvedIdempotencyKey) {
       const primaryCandidate = templateMap[effectiveChannels[0]];
@@ -561,9 +587,7 @@ async function notifyHandler(req, res) {
 
     if (quotaOwnerId) {
       // Map each accepted channel → 1 unit
-      const channelUnits = new Map(
-        resolvedChannels.map((ch) => [ch, 1]),
-      );
+      const channelUnits = new Map(resolvedChannels.map((ch) => [ch, 1]));
       try {
         const reserveResult = await reserveForChannels(sql, {
           appId,
@@ -580,8 +604,12 @@ async function notifyHandler(req, res) {
             .filter(([, r]) => r.blocked)
             .map(([ch]) => ch),
         );
-        quotaBlockedChannels = resolvedChannels.filter((ch) => blockedSet.has(ch));
-        effectiveChannels = resolvedChannels.filter((ch) => !blockedSet.has(ch));
+        quotaBlockedChannels = resolvedChannels.filter((ch) =>
+          blockedSet.has(ch),
+        );
+        effectiveChannels = resolvedChannels.filter(
+          (ch) => !blockedSet.has(ch),
+        );
 
         if (effectiveChannels.length === 0) {
           // All channels quota-blocked
@@ -638,7 +666,9 @@ async function notifyHandler(req, res) {
               UPDATE quota_reservations SET status = 'released'
               WHERE notification_id = ${notificationId} AND status = 'reserved'
             `;
-          } catch (_) { /* ignore */ }
+          } catch (_) {
+            /* ignore */
+          }
           return res.status(202).json({
             success: true,
             notification_id: existing.id,

@@ -7,7 +7,9 @@ const {
 const TEMPLATE_NAME_RE = /^[a-z0-9_]+$/;
 
 function normalizeTemplateName(value) {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase();
 }
 
 function entityScopeForChannel(channel, entityId) {
@@ -44,9 +46,7 @@ function validateAliasInput(channel, notificationType, resolvesTo) {
 
 async function listTemplateAliases({ appId, channel, entityId }) {
   const sql = getDb();
-  const normalizedChannel = channel
-    ? normalizePublicChannel(channel)
-    : null;
+  const normalizedChannel = channel ? normalizePublicChannel(channel) : null;
 
   if (normalizedChannel) {
     const scope = entityScopeForChannel(normalizedChannel, entityId);
@@ -134,12 +134,7 @@ async function deleteTemplateAlias({ id, appId }) {
   return rows[0] || null;
 }
 
-async function templateAliasTargetExists({
-  appId,
-  channel,
-  entityId,
-  name,
-}) {
+async function templateAliasTargetExists({ appId, channel, entityId, name }) {
   const sql = getDb();
 
   if (channel === "whatsapp") {
@@ -189,6 +184,21 @@ async function resolveTemplateAlias({
           ),
         ]
       : [""];
+
+  if (normalizedChannel === "whatsapp") {
+    const fallbackRows = await sql`
+      SELECT entity_id
+      FROM whatsapp_sessions
+      WHERE app_id = ${appId}
+        AND is_fallback = true
+        AND status = 'active'
+        AND connection_type = 'meta'
+      LIMIT 1
+    `;
+    if (fallbackRows[0]?.entity_id) {
+      scopes.push(fallbackRows[0].entity_id);
+    }
+  }
 
   for (const scope of scopes) {
     const rows = await sql`

@@ -208,20 +208,25 @@ Session endpoints:
 - `POST /whatsapp/sessions/:entity_id/test-message`
 - `DELETE /whatsapp/sessions/:entity_id` (disconnect and clear stored Meta token)
 
-### 10.1 Meta parent fallback model
+### 10.1 Meta parent and app fallback model
 
-Each entity can optionally reference `parent_entity_id`.
+Each entity can optionally reference `parent_entity_id`. One session per app
+can also be explicitly marked as the app fallback with `is_fallback = true`.
 
 Resolution order:
 
 1. Active direct entity session.
 2. Active parent session (if provided).
-3. No active session.
+3. Active parent links stored on the session rows.
+4. Active explicit app fallback session.
+5. No active session.
 
 Response fields indicate fallback status:
 
 - `resolved_entity_id`
 - `is_inherited`
+- `fallback_used`
+- `resolution_source`
 
 ### 10.2 WhatsApp worker semantics
 
@@ -492,6 +497,7 @@ Example: Quiz starts at 3PM → notify enrolled students exactly at 3PM.
 Example: Fee receipt on the 1st of every month at 9AM, attendance summary every Monday at 8AM.
 
 Supported frequencies for recurring:
+
 - `daily` — fires every day at `time_of_day`
 - `weekly` — fires every week on `day_of_week` at `time_of_day`
 - `monthly` — fires every month on `day_of_month` (capped at 28) at `time_of_day`
@@ -539,6 +545,7 @@ BlueMQ signs every outbound request with HMAC-SHA256 using the per-schedule `dat
 - `Content-Type: application/json`
 
 Request body:
+
 ```json
 {
   "schedule_id": "uuid",
@@ -565,17 +572,18 @@ All config lives in the database — no env vars needed. Config can be changed a
 
 All routes require `x-api-key`. `client_id` is always derived server-side from the API key.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST /schedules` | Create a schedule | |
-| `GET /schedules` | List schedules | `?status=` `?type=` filters |
-| `GET /schedules/:id` | Get one schedule | |
-| `PATCH /schedules/:id` | Update a schedule | Recomputes `next_run_at` if timing changed |
-| `DELETE /schedules/:id` | Delete a schedule | |
-| `POST /schedules/:id/trigger` | Manual trigger | Does not affect `next_run_at` or retry state |
-| `GET /schedules/:id/logs` | Execution logs | Paginated |
+| Method                        | Path              | Description                                  |
+| ----------------------------- | ----------------- | -------------------------------------------- |
+| `POST /schedules`             | Create a schedule |                                              |
+| `GET /schedules`              | List schedules    | `?status=` `?type=` filters                  |
+| `GET /schedules/:id`          | Get one schedule  |                                              |
+| `PATCH /schedules/:id`        | Update a schedule | Recomputes `next_run_at` if timing changed   |
+| `DELETE /schedules/:id`       | Delete a schedule |                                              |
+| `POST /schedules/:id/trigger` | Manual trigger    | Does not affect `next_run_at` or retry state |
+| `GET /schedules/:id/logs`     | Execution logs    | Paginated                                    |
 
 **Create request body:**
+
 ```json
 {
   "type": "recurring",
@@ -594,10 +602,10 @@ Note: `data_source_secret` is write-only — it is never returned in API respons
 
 ### 22.5 Client Settings API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET /settings/schedule` | Get schedule settings | Returns client settings + resolved defaults |
-| `PATCH /settings/schedule` | Update schedule settings | `max_retries` (1-10), `default_timezone` |
+| Method                     | Path                     | Description                                 |
+| -------------------------- | ------------------------ | ------------------------------------------- |
+| `GET /settings/schedule`   | Get schedule settings    | Returns client settings + resolved defaults |
+| `PATCH /settings/schedule` | Update schedule settings | `max_retries` (1-10), `default_timezone`    |
 
 ### 22.6 Polling Worker
 
@@ -615,4 +623,3 @@ The poll interval is refreshed from the database every 10 minutes without requir
 ### 22.7 Log Retention
 
 Execution logs in `schedule_execution_logs` are automatically purged after 90 days by a weekly cleanup job.
-
