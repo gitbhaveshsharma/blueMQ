@@ -433,6 +433,27 @@ function createWhatsAppWorker() {
           return;
         }
 
+        if (
+          result.errorCode === 132000 ||
+          (result.error && result.error.includes("132000"))
+        ) {
+          console.error(
+            `[whatsapp] ❌ [PARAMETER MISMATCH] Template "${templateName}" parameter count does not match Meta template definition for job ${notificationId}:`,
+            JSON.stringify(
+              {
+                notification_id: notificationId,
+                template_name: templateName,
+                language,
+                parameters_sent: metaPayload.parameters,
+                meta_error: result.error,
+                meta_error_data: result.errorData,
+              },
+              null,
+              2,
+            ),
+          );
+        }
+
         // Transient failure — log attempt, keep reservation 'reserved', throw to retry
         await sql`
           INSERT INTO notification_logs

@@ -121,6 +121,61 @@ BlueMQ expects channel-specific recipient data inside `user`:
 - `call`: `user.phone`
 - `in_app`: no external provider identity required beyond `user_id` (mapped internally to `inapp` worker channel)
 
+### 7.1 Multi-Recipient Support
+
+BlueMQ supports sending a single notification to **multiple recipients** within the same `user` object. This is designed for use cases where one user has multiple devices, phone numbers (e.g. student + parent), or email addresses.
+
+The `user` object accepts arrays or comma/semicolon-separated strings for any recipient field:
+
+```json
+{
+  "user": {
+    "email": ["student@example.com", "parent@example.com"],
+    "phone": ["+919650168435", "+919876543210"],
+    "fcm_token": ["token_device_1", "token_device_2"]
+  }
+}
+```
+
+Alternatively, use the plural forms:
+
+```json
+{
+  "user": {
+    "emails": ["a@example.com", "b@example.com"],
+    "phones": ["+919650168435", "+919876543210"],
+    "fcm_tokens": ["token_1", "token_2"]
+  }
+}
+```
+
+Or a comma/semicolon-separated string:
+
+```json
+{
+  "user": {
+    "phone": "+919650168435,+919876543210"
+  }
+}
+```
+
+**Per-channel and per-provider behavior:**
+
+| Channel   | Provider     | Multi-Recipient Strategy                                                       |
+|-----------|--------------|--------------------------------------------------------------------------------|
+| `push`    | Firebase     | Uses FCM `sendEachForMulticast` — one API call for all tokens.                 |
+| `email`   | Resend       | Passes all emails as the `to` array in a single API call.                      |
+| `email`   | MSG91        | Sends individually per address; partial success reported.                      |
+| `sms`     | MSG91        | Comma-joins all numbers in a single Flow API request.                          |
+| `sms`     | Twilio       | Sends individually per number; partial success reported.                       |
+| `whatsapp`| Meta         | Sends individually per number; partial success reported.                       |
+| `whatsapp`| MSG91        | Sends individually per number; partial success reported.                       |
+| `call`    | MSG91        | Comma-joins all numbers in a single Flow API request.                          |
+
+**Partial success:** For providers that dispatch individually, if at least one recipient succeeds the job is marked `sent`. Any per-recipient failures are captured in logs (`partialErrors`) and visible in `GET /notifications/:notificationId/logs`.
+
+**Deduplication:** Recipient lists are automatically deduplicated by value before dispatch — the same phone number appearing twice is only contacted once.
+
 ## 8. Provider Routing Rules
 
 Provider routing is environment-driven and strict.
@@ -475,6 +530,8 @@ Do not hardcode them per tenant inside business logic.
 - Verify `call` channel is included in notify request.
 - Verify app-level/provider-level MSG91 auth key and call flow ID.
 - Verify `user.phone` is present and valid.
+- For multi-recipient calls, verify all phone numbers in `user.phones` / `user.phone` (array or comma-separated) are valid.
+- Check `GET /notifications/:notificationId/logs` for `partialErrors` if some recipients succeeded and others did not.
 
 ### 21.4 Queue backlog
 
@@ -518,8 +575,8 @@ The client's `data_source_url` must respond with:
       "body": "string",
       "channels": ["push", "email", "in_app", "whatsapp"],
       "user": {
-        "email": "string",
-        "phone": "string",
+        "email": ["student@example.com", "parent@example.com"],
+        "phone": ["+919650168435", "+919876543210"],
         "fcm_token": "string"
       },
       "variables": {},

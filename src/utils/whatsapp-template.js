@@ -244,7 +244,56 @@ function exampleVariableMappings(components) {
     });
   }
 
+  for (const slot of dynamicButtonSlots(components)) {
+    if (!mappings.has(slot.index)) {
+      mappings.set(
+        slot.index,
+        slot.subType === "COPY_CODE"
+          ? "coupon_code"
+          : `button_${slot.buttonIndex + 1}_var`,
+      );
+    }
+  }
+
   return mappings;
+}
+
+function resolveSlotValue(namedValues, mappedName, slot) {
+  if (mappedName) {
+    const key = normalizeVariableKey(mappedName);
+    if (namedValues.has(key)) {
+      const val = namedValues.get(key);
+      if (val !== undefined && val !== null && String(val).trim() !== "") {
+        return String(val);
+      }
+    }
+  }
+
+  if (slot) {
+    const buttonKeys =
+      slot.subType === "COPY_CODE"
+        ? ["couponcode", "coupon", "code", "copycode", "promocode"]
+        : [
+            `button${slot.buttonIndex + 1}var`,
+            "actionurl",
+            "ctaurl",
+            "url",
+            "link",
+          ];
+    for (const cand of buttonKeys) {
+      if (namedValues.has(cand)) {
+        const val = namedValues.get(cand);
+        if (val !== undefined && val !== null && String(val).trim() !== "") {
+          return String(val);
+        }
+      }
+    }
+    if (slot.subType === "URL") {
+      return "?ref=whatsapp";
+    }
+  }
+
+  return "";
 }
 
 function normalizeWhatsAppVariables(components, variables) {
@@ -257,13 +306,18 @@ function normalizeWhatsAppVariables(components, variables) {
     ]),
   );
   const explicitValues = positionalValues(input);
+
+  const buttonSlots = dynamicButtonSlots(components);
+  const buttonSlotMap = new Map(buttonSlots.map((s) => [s.index, s]));
+
+  const textIndexes = (components || []).flatMap((component) =>
+    placeholderIndexes(component?.text),
+  );
+  const buttonIndexes = buttonSlots.map((s) => s.index);
   const indexes = [
-    ...new Set(
-      (components || []).flatMap((component) =>
-        placeholderIndexes(component?.text),
-      ),
-    ),
+    ...new Set([...textIndexes, ...buttonIndexes]),
   ].sort((a, b) => a - b);
+
   const highestIndex = Math.max(
     indexes[indexes.length - 1] || 0,
     explicitValues.length,
@@ -276,9 +330,8 @@ function normalizeWhatsAppVariables(components, variables) {
       return String(explicitValues[offset] ?? "");
     }
     const mappedName = mappings.get(index);
-    return mappedName
-      ? String(namedValues.get(normalizeVariableKey(mappedName)) ?? "")
-      : "";
+    const slot = buttonSlotMap.get(index);
+    return resolveSlotValue(namedValues, mappedName, slot);
   });
 
   const missing = indexes
@@ -287,6 +340,24 @@ function normalizeWhatsAppVariables(components, variables) {
       index,
       variable: mappings.get(index) || null,
     }));
+
+  if (missing.length > 0) {
+    console.warn(
+      `[whatsapp-template] ⚠ Parameter mismatch for template variables:`,
+      JSON.stringify(
+        {
+          missing_count: missing.length,
+          missing,
+          expected_variables: Array.from(mappings.entries()).map(
+            ([idx, name]) => `{{${idx}}}: ${name}`,
+          ),
+          provided_keys: Object.keys(input),
+        },
+        null,
+        2,
+      ),
+    );
+  }
 
   return {
     variables: { ...input, whatsapp },

@@ -1,6 +1,12 @@
+"use strict";
+
 const axios = require("axios");
 const { INotificationProvider } = require("./interface");
 const config = require("../config");
+const {
+  extractPhoneNumbers,
+  extractEmails,
+} = require("../utils/user-destinations");
 
 const MSG91_API = "https://api.msg91.com/api/v5";
 const MSG91_DEFAULT_FLOW_BASE_API = "https://control.msg91.com/api/v5";
@@ -8,13 +14,19 @@ const MSG91_DEFAULT_FLOW_BASE_API = "https://control.msg91.com/api/v5";
 /**
  * MSG91 Provider — handles WhatsApp, SMS, Email and Call.
  *
+ * Multi-recipient support:
+ * - SMS  / Call : sends to all phone numbers found in user.phone / user.phones / user.mobile / etc.
+ * - Email       : sends to all email addresses found in user.email / user.emails.
+ * - WhatsApp    : sends to all phone numbers found in user.phone / user.phones / user.mobile / etc.
+ *
  * Docs: https://docs.msg91.com/
  */
 class MSG91Provider extends INotificationProvider {
   constructor(options = {}) {
     super("msg91");
     this.authKey = options.authKey || config.msg91.authKey;
-    this.whatsappNumber = options.whatsappNumber || config.msg91.whatsappNumber;
+    this.whatsappNumber =
+      options.whatsappNumber || config.msg91.whatsappNumber;
     this.flowBaseUrl = (
       options.flowBaseUrl ||
       config.msg91.flowBaseUrl ||
@@ -101,11 +113,16 @@ class MSG91Provider extends INotificationProvider {
   }
 
   // ─────────────────────────────────────────────
-  //  SMS (Flow API)
+  //  SMS (Flow API) — multi-recipient
   // ─────────────────────────────────────────────
+
+  /**
+   * Send SMS to one or more phone numbers via MSG91 Flow API.
+   * MSG91 accepts a comma-separated list of mobiles in a single flow request.
+   */
   async sendSMS(payload) {
-    const mobile = this._formatFlowMobile(payload?.user?.phone);
-    if (!mobile) {
+    const phones = extractPhoneNumbers(payload?.user);
+    if (!phones || phones.length === 0) {
       return {
         success: false,
         error: "User has no phone number",
@@ -113,21 +130,46 @@ class MSG91Provider extends INotificationProvider {
       };
     }
 
+    const mobiles = phones
+      .map((p) => this._formatFlowMobile(p))
+      .filter(Boolean)
+      .join(",");
+
+    if (!mobiles) {
+      return {
+        success: false,
+        error: "No valid phone numbers found for SMS",
+        retryable: false,
+      };
+    }
+
+    if (phones.length > 1) {
+      console.info(
+        `[msg91] SMS multi-recipient: ${phones.length} numbers → "${mobiles}"`,
+      );
+    }
+
     return this._sendFlow({
       flowId: this.smsFlowId,
       recipientField: "mobiles",
-      recipientValue: mobile,
+      recipientValue: mobiles,
       body: payload?.body,
       payload,
     });
   }
 
   // ─────────────────────────────────────────────
-  //  EMAIL (Flow API)
+  //  EMAIL (Flow API) — multi-recipient
   // ─────────────────────────────────────────────
+
+  /**
+   * Send email to one or more addresses via MSG91 Flow API.
+   * Iterates over each address individually since MSG91 flow
+   * expects a single "email" field per request.
+   */
   async sendEmail(payload) {
-    const email = String(payload?.user?.email || "").trim();
-    if (!email) {
+    const emails = extractEmails(payload?.user);
+    if (!emails || emails.length === 0) {
       return {
         success: false,
         error: "User has no email address",
@@ -135,18 +177,67 @@ class MSG91Provider extends INotificationProvider {
       };
     }
 
-    return this._sendFlow({
-      flowId: this.emailFlowId,
-      recipientField: "email",
-      recipientValue: email,
-      body: payload?.body,
-      payload,
-    });
+    if (emails.length === 1) {
+      return this._sendFlow({
+        flowId: this.emailFlowId,
+        recipientField: "email",
+        recipientValue: emails[0],
+        body: payload?.body,
+        payload,
+      });
+    }
+
+    // Multi-email: send individually, report partial success
+    console.info(
+      `[msg91] Email multi-recipient: ${emails.length} addresses`,
+    );
+
+    const messageIds = [];
+    const failures = [];
+
+    for (const email of emails) {
+      const result = await this._sendFlow({
+        flowId: this.emailFlowId,
+        recipientField: "email",
+        recipientValue: email,
+        body: payload?.body,
+        payload,
+      });
+
+      if (result.success) {
+        if (result.providerMessageId) messageIds.push(result.providerMessageId);
+        console.info(`[msg91] ✅ Email sent to ${email}`);
+      } else {
+        failures.push(`${email}: ${result.error}`);
+        console.error(`[msg91] ❌ Email failed for ${email}: ${result.error}`);
+      }
+    }
+
+    if (messageIds.length > 0) {
+      return {
+        success: true,
+        providerMessageId: messageIds.join(", "),
+        providerMessageIds: messageIds,
+        totalSent: messageIds.length,
+        totalRecipients: emails.length,
+        partialErrors: failures.length > 0 ? failures : undefined,
+      };
+    }
+
+    return {
+      success: false,
+      error: `MSG91_EMAIL_DISPATCH_FAILED: Failed to deliver to all ${emails.length} recipients (${failures.join("; ")})`,
+    };
   }
 
   // ─────────────────────────────────────────────
-  //  WHATSAPP
+  //  WHATSAPP — multi-recipient
   // ─────────────────────────────────────────────
+
+  /**
+   * Send WhatsApp message to one or more phone numbers via MSG91.
+   * Iterates over each number individually (MSG91 WhatsApp API is per-recipient).
+   */
   async sendWhatsApp(payload) {
     const { body, user, title } = payload;
 
@@ -165,7 +256,8 @@ class MSG91Provider extends INotificationProvider {
       };
     }
 
-    if (!user.phone) {
+    const phones = extractPhoneNumbers(user);
+    if (!phones || phones.length === 0) {
       return {
         success: false,
         error: "User has no phone number for WhatsApp",
@@ -173,44 +265,91 @@ class MSG91Provider extends INotificationProvider {
       };
     }
 
-    const reqBody = {
-      integrated_number: this.whatsappNumber,
-      content_type: "text",
-      payload: {
-        to: user.phone,
-        type: "text",
-        messaging_product: "whatsapp",
-        text: {
-          body: title ? `*${title}*\n\n${body}` : body,
-        },
-      },
-    };
-
-    try {
-      const res = await axios.post(
-        `${MSG91_API}/whatsapp/whatsapp/apis/send-message`,
-        reqBody,
-        { headers: this._headers() },
+    if (phones.length > 1) {
+      console.info(
+        `[msg91] WhatsApp multi-recipient: ${phones.length} numbers`,
       );
+    }
 
-      const messageId = res.data?.message_id || res.data?.request_id || null;
+    const messageIds = [];
+    const failures = [];
 
+    for (const phone of phones) {
+      const reqBody = {
+        integrated_number: this.whatsappNumber,
+        content_type: "text",
+        payload: {
+          to: phone,
+          type: "text",
+          messaging_product: "whatsapp",
+          text: {
+            body: title ? `*${title}*\n\n${body}` : body,
+          },
+        },
+      };
+
+      try {
+        const res = await axios.post(
+          `${MSG91_API}/whatsapp/whatsapp/apis/send-message`,
+          reqBody,
+          { headers: this._headers() },
+        );
+
+        const messageId =
+          res.data?.message_id || res.data?.request_id || null;
+        if (messageId) messageIds.push(messageId);
+        console.info(
+          `[msg91] ✅ WhatsApp sent to ${phone} (id: ${messageId})`,
+        );
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message;
+        failures.push(`${phone}: ${msg}`);
+        console.error(
+          `[msg91] ❌ WhatsApp failed for ${phone}: ${msg}`,
+        );
+      }
+    }
+
+    if (phones.length === 1) {
+      // Single recipient — propagate failure cleanly
+      if (failures.length > 0) {
+        return { success: false, error: failures[0] };
+      }
       return {
         success: true,
-        providerMessageId: messageId,
+        providerMessageId: messageIds[0] || null,
       };
-    } catch (err) {
-      const msg = err.response?.data?.message || err.message;
-      return { success: false, error: String(msg) };
     }
+
+    // Multi-recipient
+    if (messageIds.length > 0) {
+      return {
+        success: true,
+        providerMessageId: messageIds.join(", "),
+        providerMessageIds: messageIds,
+        totalSent: messageIds.length,
+        totalRecipients: phones.length,
+        partialErrors: failures.length > 0 ? failures : undefined,
+      };
+    }
+
+    return {
+      success: false,
+      error: `MSG91_WHATSAPP_DISPATCH_FAILED: Failed to deliver to all ${phones.length} recipients (${failures.join("; ")})`,
+    };
   }
 
   // ─────────────────────────────────────────────
-  //  CALL (Flow API)
+  //  CALL (Flow API) — multi-recipient
   // ─────────────────────────────────────────────
+
+  /**
+   * Initiate a call to one or more phone numbers via MSG91 Flow API.
+   * MSG91 accepts a comma-separated list of mobiles in a single flow request.
+   */
   async sendCall(payload) {
-    const mobile = this._formatFlowMobile(payload?.user?.phone);
-    if (!mobile) {
+    const phones = extractPhoneNumbers(payload?.user);
+    if (!phones || phones.length === 0) {
       return {
         success: false,
         error: "User has no phone number for call",
@@ -218,10 +357,29 @@ class MSG91Provider extends INotificationProvider {
       };
     }
 
+    const mobiles = phones
+      .map((p) => this._formatFlowMobile(p))
+      .filter(Boolean)
+      .join(",");
+
+    if (!mobiles) {
+      return {
+        success: false,
+        error: "No valid phone numbers found for call",
+        retryable: false,
+      };
+    }
+
+    if (phones.length > 1) {
+      console.info(
+        `[msg91] Call multi-recipient: ${phones.length} numbers → "${mobiles}"`,
+      );
+    }
+
     return this._sendFlow({
       flowId: this.callFlowId,
       recipientField: "mobiles",
-      recipientValue: mobile,
+      recipientValue: mobiles,
       body: payload?.body,
       payload,
     });
