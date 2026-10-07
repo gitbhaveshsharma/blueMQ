@@ -71,23 +71,7 @@ function normalizeFirebaseToken(rawValue) {
   return token;
 }
 
-function getDeviceToken(user) {
-  const candidates = [
-    user?.fcm_token,
-    user?.fcmToken,
-    user?.firebase_token,
-    user?.firebaseToken,
-    user?.push_token,
-    user?.pushToken,
-  ];
-
-  for (const value of candidates) {
-    const normalized = normalizeFirebaseToken(value);
-    if (normalized) return normalized;
-  }
-
-  return null;
-}
+const { extractPushTokens } = require("../utils/user-destinations");
 
 function serializeData(payload) {
   const source = {
@@ -130,35 +114,70 @@ class FirebaseProvider extends INotificationProvider {
   }
 
   async sendPush(payload) {
-    const token = getDeviceToken(payload.user);
-    if (!token) {
+    const tokens = extractPushTokens(payload.user);
+    if (!tokens || tokens.length === 0) {
       return {
         success: false,
         error:
-          "User has no Firebase token (expected fcm_token or firebase_token)",
+          "User has no Firebase token (expected fcm_token, fcm_tokens, firebase_token, or push_token)",
         retryable: false,
       };
     }
 
     try {
-      // Send as a data-only message (no `notification` field).
-      // This prevents the browser from auto-displaying a generic notification
-      // and gives the service worker full control over the display (custom icon,
-      // click action, deduplication via tag, etc.).
       const fcmData = {
         title: payload.title || "",
         body: payload.body || "",
         ...serializeData(payload),
       };
 
-      console.log("[firebase] Sending data-only message:", JSON.stringify({ token: token.slice(0, 20) + "...", data: fcmData }));
+      if (tokens.length === 1) {
+        console.log(
+          "[firebase] Sending data-only message to 1 token:",
+          JSON.stringify({ token: tokens[0].slice(0, 20) + "...", data: fcmData }),
+        );
+        const providerMessageId = await this.messaging.send({
+          token: tokens[0],
+          data: fcmData,
+        });
+        return { success: true, providerMessageId };
+      }
 
-      const providerMessageId = await this.messaging.send({
-        token,
+      console.log(
+        `[firebase] Sending multicast message to ${tokens.length} tokens:`,
+        JSON.stringify({ tokens_count: tokens.length, data: fcmData }),
+      );
+
+      const batchResponse = await this.messaging.sendEachForMulticast({
+        tokens,
         data: fcmData,
       });
 
-      return { success: true, providerMessageId };
+      const messageIds = batchResponse.responses
+        .filter((r) => r.success && r.messageId)
+        .map((r) => r.messageId);
+
+      if (batchResponse.successCount > 0) {
+        return {
+          success: true,
+          providerMessageId: messageIds.join(", "),
+          providerMessageIds: messageIds,
+          totalSent: batchResponse.successCount,
+          totalTokens: tokens.length,
+        };
+      }
+
+      const firstFailure = batchResponse.responses.find((r) => !r.success);
+      const err = firstFailure?.error;
+      const errorCode = err?.code || "";
+      const errorMessage = err?.message || "All tokens failed delivery";
+
+      return {
+        success: false,
+        error: errorCode ? `${errorCode}: ${errorMessage}` : errorMessage,
+        errorCode,
+        retryable: !isNonRetryableFirebaseError(errorCode, errorMessage),
+      };
     } catch (err) {
       const errorCode = err?.code || err?.errorInfo?.code || "";
       const errorMessage = err?.message || "Firebase send failed";

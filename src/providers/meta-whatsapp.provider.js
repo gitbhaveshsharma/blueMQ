@@ -1,6 +1,7 @@
 const axios = require("axios");
 const { INotificationProvider } = require("./interface");
 const { META_GRAPH_BASE, META_API_VERSION } = require("../config/meta-graph");
+const { extractPhoneNumbers } = require("../utils/user-destinations");
 
 /**
  * Meta WhatsApp Cloud API Provider
@@ -130,17 +131,84 @@ class MetaWhatsAppProvider extends INotificationProvider {
         error: "META_PHONE_NUMBER_ID_MISSING: No Meta phone number ID provided",
       };
     }
-
-    // Validate recipient phone
-    const recipientPhone = user?.phone;
-    if (!recipientPhone) {
+    // Extract recipient phone(s)
+    const recipientPhones = extractPhoneNumbers(user);
+    if (!recipientPhones || recipientPhones.length === 0) {
       return {
         success: false,
         error: "RECIPIENT_PHONE_MISSING: No recipient phone number provided",
       };
     }
 
-    // Format phone number for Meta API
+    const endpoint = this._buildEndpoint(metaPhoneNumberId);
+    const headers = this._buildHeaders(metaApiKey);
+    const useTemplate = Boolean(templateName && language);
+
+    // Multi-recipient dispatch (e.g. Student + Parent phone numbers)
+    if (recipientPhones.length > 1) {
+      console.info(
+        `[meta-whatsapp] Multi-recipient request: ${recipientPhones.length} numbers mode=${useTemplate ? "template" : "text"} template=${templateName || "none"}`,
+      );
+
+      const messageIds = [];
+      const failures = [];
+
+      for (const phone of recipientPhones) {
+        const formatted = this._formatPhoneNumber(phone);
+        if (!formatted || formatted.length < 7) {
+          failures.push(`INVALID_PHONE_NUMBER: "${phone}"`);
+          continue;
+        }
+
+        const requestBody = useTemplate
+          ? this._buildTemplatePayload(formatted, {
+              templateName,
+              language,
+              parameters,
+            })
+          : this._buildMessagePayload(
+              formatted,
+              actionUrl ? `${body}\n\n🔗 ${actionUrl}` : body,
+            );
+
+        try {
+          const response = await axios.post(endpoint, requestBody, {
+            headers,
+            timeout: 30000,
+          });
+          const mid = response.data?.messages?.[0]?.id || null;
+          if (mid) messageIds.push(mid);
+          console.info(`[meta-whatsapp] ✅ Sent to ${formatted} (id: ${mid})`);
+        } catch (postErr) {
+          const errMsg =
+            postErr.response?.data?.error?.message || postErr.message;
+          failures.push(`${formatted}: ${errMsg}`);
+          console.error(
+            `[meta-whatsapp] ❌ Failed to send to ${formatted}:`,
+            errMsg,
+          );
+        }
+      }
+
+      if (messageIds.length > 0) {
+        return {
+          success: true,
+          providerMessageId: messageIds.join(", "),
+          providerMessageIds: messageIds,
+          totalSent: messageIds.length,
+          totalRecipients: recipientPhones.length,
+          partialErrors: failures.length > 0 ? failures : undefined,
+        };
+      }
+
+      return {
+        success: false,
+        error: `META_DISPATCH_FAILED: Failed to deliver to all ${recipientPhones.length} recipients (${failures.join("; ")})`,
+      };
+    }
+
+    // Single recipient dispatch
+    const recipientPhone = recipientPhones[0];
     const formattedPhone = this._formatPhoneNumber(recipientPhone);
     if (!formattedPhone || formattedPhone.length < 7) {
       return {
@@ -149,12 +217,10 @@ class MetaWhatsAppProvider extends INotificationProvider {
       };
     }
 
-    const endpoint = this._buildEndpoint(metaPhoneNumberId);
-    const headers = this._buildHeaders(metaApiKey);
-    const useTemplate = Boolean(templateName && language);
     console.info(
       `[meta-whatsapp] Request mode=${useTemplate ? "template" : "text"} template=${templateName || "none"} language=${language || "none"} to=${formattedPhone} parameter_components=${Array.isArray(parameters) ? parameters.length : 0}`,
     );
+
     const requestBody = useTemplate
       ? this._buildTemplatePayload(formattedPhone, {
           templateName,
