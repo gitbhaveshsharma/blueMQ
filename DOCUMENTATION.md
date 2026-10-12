@@ -121,6 +121,61 @@ BlueMQ expects channel-specific recipient data inside `user`:
 - `call`: `user.phone`
 - `in_app`: no external provider identity required beyond `user_id` (mapped internally to `inapp` worker channel)
 
+### 7.1 Multi-Recipient Support
+
+BlueMQ supports sending a single notification to **multiple recipients** within the same `user` object. This is designed for use cases where one user has multiple devices, phone numbers (e.g. student + parent), or email addresses.
+
+The `user` object accepts arrays or comma/semicolon-separated strings for any recipient field:
+
+```json
+{
+  "user": {
+    "email": ["student@example.com", "parent@example.com"],
+    "phone": ["+919650168435", "+919876543210"],
+    "fcm_token": ["token_device_1", "token_device_2"]
+  }
+}
+```
+
+Alternatively, use the plural forms:
+
+```json
+{
+  "user": {
+    "emails": ["a@example.com", "b@example.com"],
+    "phones": ["+919650168435", "+919876543210"],
+    "fcm_tokens": ["token_1", "token_2"]
+  }
+}
+```
+
+Or a comma/semicolon-separated string:
+
+```json
+{
+  "user": {
+    "phone": "+919650168435,+919876543210"
+  }
+}
+```
+
+**Per-channel and per-provider behavior:**
+
+| Channel   | Provider     | Multi-Recipient Strategy                                                       |
+|-----------|--------------|--------------------------------------------------------------------------------|
+| `push`    | Firebase     | Uses FCM `sendEachForMulticast` — one API call for all tokens.                 |
+| `email`   | Resend       | Passes all emails as the `to` array in a single API call.                      |
+| `email`   | MSG91        | Sends individually per address; partial success reported.                      |
+| `sms`     | MSG91        | Comma-joins all numbers in a single Flow API request.                          |
+| `sms`     | Twilio       | Sends individually per number; partial success reported.                       |
+| `whatsapp`| Meta         | Sends individually per number; partial success reported.                       |
+| `whatsapp`| MSG91        | Sends individually per number; partial success reported.                       |
+| `call`    | MSG91        | Comma-joins all numbers in a single Flow API request.                          |
+
+**Partial success:** For providers that dispatch individually, if at least one recipient succeeds the job is marked `sent`. Any per-recipient failures are captured in logs (`partialErrors`) and visible in `GET /notifications/:notificationId/logs`.
+
+**Deduplication:** Recipient lists are automatically deduplicated by value before dispatch — the same phone number appearing twice is only contacted once.
+
 ## 8. Provider Routing Rules
 
 Provider routing is environment-driven and strict.
@@ -208,20 +263,25 @@ Session endpoints:
 - `POST /whatsapp/sessions/:entity_id/test-message`
 - `DELETE /whatsapp/sessions/:entity_id` (disconnect and clear stored Meta token)
 
-### 10.1 Meta parent fallback model
+### 10.1 Meta parent and app fallback model
 
-Each entity can optionally reference `parent_entity_id`.
+Each entity can optionally reference `parent_entity_id`. One session per app
+can also be explicitly marked as the app fallback with `is_fallback = true`.
 
 Resolution order:
 
 1. Active direct entity session.
 2. Active parent session (if provided).
-3. No active session.
+3. Active parent links stored on the session rows.
+4. Active explicit app fallback session.
+5. No active session.
 
 Response fields indicate fallback status:
 
 - `resolved_entity_id`
 - `is_inherited`
+- `fallback_used`
+- `resolution_source`
 
 ### 10.2 WhatsApp worker semantics
 
@@ -470,6 +530,8 @@ Do not hardcode them per tenant inside business logic.
 - Verify `call` channel is included in notify request.
 - Verify app-level/provider-level MSG91 auth key and call flow ID.
 - Verify `user.phone` is present and valid.
+- For multi-recipient calls, verify all phone numbers in `user.phones` / `user.phone` (array or comma-separated) are valid.
+- Check `GET /notifications/:notificationId/logs` for `partialErrors` if some recipients succeeded and others did not.
 
 ### 21.4 Queue backlog
 
@@ -492,6 +554,7 @@ Example: Quiz starts at 3PM → notify enrolled students exactly at 3PM.
 Example: Fee receipt on the 1st of every month at 9AM, attendance summary every Monday at 8AM.
 
 Supported frequencies for recurring:
+
 - `daily` — fires every day at `time_of_day`
 - `weekly` — fires every week on `day_of_week` at `time_of_day`
 - `monthly` — fires every month on `day_of_month` (capped at 28) at `time_of_day`
@@ -512,8 +575,8 @@ The client's `data_source_url` must respond with:
       "body": "string",
       "channels": ["push", "email", "in_app", "whatsapp"],
       "user": {
-        "email": "string",
-        "phone": "string",
+        "email": ["student@example.com", "parent@example.com"],
+        "phone": ["+919650168435", "+919876543210"],
         "fcm_token": "string"
       },
       "variables": {},
@@ -539,6 +602,7 @@ BlueMQ signs every outbound request with HMAC-SHA256 using the per-schedule `dat
 - `Content-Type: application/json`
 
 Request body:
+
 ```json
 {
   "schedule_id": "uuid",
@@ -565,17 +629,18 @@ All config lives in the database — no env vars needed. Config can be changed a
 
 All routes require `x-api-key`. `client_id` is always derived server-side from the API key.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST /schedules` | Create a schedule | |
-| `GET /schedules` | List schedules | `?status=` `?type=` filters |
-| `GET /schedules/:id` | Get one schedule | |
-| `PATCH /schedules/:id` | Update a schedule | Recomputes `next_run_at` if timing changed |
-| `DELETE /schedules/:id` | Delete a schedule | |
-| `POST /schedules/:id/trigger` | Manual trigger | Does not affect `next_run_at` or retry state |
-| `GET /schedules/:id/logs` | Execution logs | Paginated |
+| Method                        | Path              | Description                                  |
+| ----------------------------- | ----------------- | -------------------------------------------- |
+| `POST /schedules`             | Create a schedule |                                              |
+| `GET /schedules`              | List schedules    | `?status=` `?type=` filters                  |
+| `GET /schedules/:id`          | Get one schedule  |                                              |
+| `PATCH /schedules/:id`        | Update a schedule | Recomputes `next_run_at` if timing changed   |
+| `DELETE /schedules/:id`       | Delete a schedule |                                              |
+| `POST /schedules/:id/trigger` | Manual trigger    | Does not affect `next_run_at` or retry state |
+| `GET /schedules/:id/logs`     | Execution logs    | Paginated                                    |
 
 **Create request body:**
+
 ```json
 {
   "type": "recurring",
@@ -594,10 +659,10 @@ Note: `data_source_secret` is write-only — it is never returned in API respons
 
 ### 22.5 Client Settings API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET /settings/schedule` | Get schedule settings | Returns client settings + resolved defaults |
-| `PATCH /settings/schedule` | Update schedule settings | `max_retries` (1-10), `default_timezone` |
+| Method                     | Path                     | Description                                 |
+| -------------------------- | ------------------------ | ------------------------------------------- |
+| `GET /settings/schedule`   | Get schedule settings    | Returns client settings + resolved defaults |
+| `PATCH /settings/schedule` | Update schedule settings | `max_retries` (1-10), `default_timezone`    |
 
 ### 22.6 Polling Worker
 
@@ -615,4 +680,3 @@ The poll interval is refreshed from the database every 10 minutes without requir
 ### 22.7 Log Retention
 
 Execution logs in `schedule_execution_logs` are automatically purged after 90 days by a weekly cleanup job.
-

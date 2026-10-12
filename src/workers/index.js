@@ -3,6 +3,8 @@ const {
   startScheduledNotificationWorker,
 } = require("./scheduled-notification.worker");
 const { startLogCleanupWorker } = require("./log-cleanup.worker");
+const quotaStaleWorker = require("./quota-stale.worker");
+const webhookDeliveryWorker = require("./webhook-delivery.worker");
 
 const WORKER_FACTORIES = {
   push: require("./push.worker"),
@@ -47,6 +49,12 @@ function startWorkers(channels) {
 
   // Start the log cleanup worker (weekly schedule)
   startLogCleanupWorker();
+
+  // Start the quota stale-reservation cleanup worker (every 5 minutes)
+  quotaStaleWorker.start();
+
+  // Start the webhook delivery polling worker (every 10 seconds)
+  webhookDeliveryWorker.start();
 
   return workers;
 }

@@ -12,7 +12,8 @@
     "dev:worker": "nodemon src/index.js --mode=worker",
     "migrate": "node src/db/migrate.js",
     "test:db": "node scripts/test-db-connection.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest",
+    "test:unit": "jest tests/"
   },
   "keywords": [
     "notifications",
@@ -45,6 +46,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "nodemon": "^3.1.14"
   }
 }

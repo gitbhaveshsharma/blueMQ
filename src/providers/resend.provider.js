@@ -3,6 +3,8 @@ const { INotificationProvider } = require("./interface");
 const config = require("../config");
 const { buildEmailHtml } = require("../utils/email");
 
+const { extractEmails } = require("../utils/user-destinations");
+
 class ResendProvider extends INotificationProvider {
   constructor() {
     super("resend");
@@ -11,10 +13,14 @@ class ResendProvider extends INotificationProvider {
   }
 
   async sendEmail(payload) {
-    const to = payload.user?.email;
-    if (!to) return { success: false, error: "User has no email address" };
+    const emails = extractEmails(payload.user);
+    if (!emails || emails.length === 0) {
+      return { success: false, error: "User has no email address" };
+    }
     if (!config.resend.apiKey)
       return { success: false, error: "RESEND_API_KEY is not configured" };
+
+    const to = emails.length === 1 ? emails[0] : emails;
 
     try {
       const { data, error } = await this.client.emails.send({

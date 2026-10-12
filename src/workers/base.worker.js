@@ -1,9 +1,13 @@
+"use strict";
+
 const { Worker } = require("bullmq");
 const { getRedisConnection } = require("../queues/connection");
 const { registry } = require("../providers/registry");
 const { getAppProvider } = require("../providers/per-app-factory");
 const { getDb } = require("../db");
 const config = require("../config");
+const { settleOnClient } = require("../utils/quota");
+const { enqueueWebhookEvent } = require("./webhook-delivery.worker");
 
 /**
  * Create a BullMQ Worker for a given channel.
@@ -12,8 +16,11 @@ const config = require("../config");
  *   1. Pick job from queue
  *   2. Resolve provider (per-app credentials → server default)
  *   3. Send via resolved provider
- *   4. Log result to notification_logs
- *   5. Update parent notification status
+ *   4. In a single DB transaction:
+ *        a. INSERT notification_logs
+ *        b. UPDATE notifications.status
+ *        c. Settle quota reservation (consumed on success, released on terminal failure)
+ *   5. On transient failure: throw so BullMQ retries. Reservation stays 'reserved'.
  *
  * @param {string} channel — push | email | sms | whatsapp | call | inapp
  * @returns {Worker}
@@ -57,7 +64,7 @@ function createChannelWorker(channel) {
         data,
       };
 
-      // ─── Resolve provider: per-app credentials → server default ───
+      // ─── Resolve provider: per-app credentials → server default ───────────
       const methodMap = {
         push: "sendPush",
         email: "sendEmail",
@@ -89,55 +96,116 @@ function createChannelWorker(channel) {
         providerName = result.provider;
       }
 
-      // ─── Log the result ───
+      // ─── Log result + settle quota in ONE transaction ─────────────────────
       const sql = getDb();
 
       if (result.success) {
-        await sql`
-          INSERT INTO notification_logs
-            (notification_id, channel, status, provider, provider_message_id, attempt_number)
-          VALUES
-            (${notificationId}, ${channel}, 'sent', ${result.provider}, ${result.providerMessageId || null}, ${attemptNumber})
-        `;
+        // ── Terminal: success ── consume reservation, log 'sent', update status
+        const dbClient = await sql.raw.connect();
+        let notifRow;
+        try {
+          await dbClient.query("BEGIN");
 
-        // Update master notification status
-        await sql`
-          UPDATE notifications
-          SET status = CASE
-            WHEN status = 'pending' THEN 'delivered'
-            WHEN status = 'failed'  THEN 'partial'
-            ELSE status
-          END
-          WHERE id = ${notificationId}
-        `;
+          await dbClient.query(
+            `INSERT INTO notification_logs
+               (notification_id, channel, status, provider, provider_message_id, attempt_number)
+             VALUES ($1, $2, 'sent', $3, $4, $5)`,
+            [notificationId, channel, result.provider, result.providerMessageId || null, attemptNumber],
+          );
+
+          const updRes = await dbClient.query(
+            `UPDATE notifications
+             SET status = CASE
+               WHEN status = 'pending' THEN 'delivered'
+               WHEN status = 'failed'  THEN 'partial'
+               ELSE status
+             END
+             WHERE id = $1
+             RETURNING app_id, status, expected_channels, entity_id, parent_entity_id, external_user_id, type`,
+            [notificationId],
+          );
+          notifRow = updRes.rows[0];
+
+          // Settle: mark reservation consumed (reserved-- used++)
+          await settleOnClient(dbClient, { notificationId, channel, outcome: "consumed" });
+
+          await dbClient.query("COMMIT");
+        } catch (txErr) {
+          await dbClient.query("ROLLBACK").catch(() => {});
+          throw txErr;
+        } finally {
+          dbClient.release();
+        }
+
+        // Fire notification.final if all expected channels have settled
+        if (notifRow) {
+          await _maybeFireNotificationFinal(sql, notificationId, notifRow).catch((e) =>
+            console.warn(`[${channel}] notification.final check failed:`, e.message)
+          );
+        }
 
         console.log(
           `[${channel}] ✅ ${notificationId} sent via ${result.provider}`,
         );
       } else {
-        // Provider returned success=false but didn't throw — treat as failure
-        await sql`
-          INSERT INTO notification_logs
-            (notification_id, channel, status, provider, error, attempt_number)
-          VALUES
-            (${notificationId}, ${channel}, 'failed', ${result.provider || channel}, ${result.error || "Unknown error"}, ${attemptNumber})
-        `;
+        // Provider returned success=false but didn't throw
 
         if (result.retryable === false) {
-          await sql`
-            UPDATE notifications
-            SET status = 'failed'
-            WHERE id = ${notificationId}
-              AND status != 'delivered'
-          `;
+          // ── Terminal: non-retryable failure ── release reservation, log 'failed'
+          const dbClient = await sql.raw.connect();
+          let notifRow2;
+          try {
+            await dbClient.query("BEGIN");
+
+            await dbClient.query(
+              `INSERT INTO notification_logs
+                 (notification_id, channel, status, provider, error, attempt_number)
+               VALUES ($1, $2, 'failed', $3, $4, $5)`,
+              [notificationId, channel, result.provider || channel, result.error || "Unknown error", attemptNumber],
+            );
+
+            const updRes2 = await dbClient.query(
+              `UPDATE notifications
+               SET status = 'failed'
+               WHERE id = $1 AND status != 'delivered'
+               RETURNING app_id, status, expected_channels, entity_id, parent_entity_id, external_user_id, type`,
+              [notificationId],
+            );
+            notifRow2 = updRes2.rows[0];
+
+            // Settle: release reservation (not charged)
+            await settleOnClient(dbClient, { notificationId, channel, outcome: "released" });
+
+            await dbClient.query("COMMIT");
+          } catch (txErr) {
+            await dbClient.query("ROLLBACK").catch(() => {});
+            throw txErr;
+          } finally {
+            dbClient.release();
+          }
+
+          if (notifRow2) {
+            await _maybeFireNotificationFinal(sql, notificationId, notifRow2).catch((e) =>
+              console.warn(`[${channel}] notification.final check failed:`, e.message)
+            );
+          }
 
           console.warn(
             `[${channel}] ⚠ ${notificationId} non-retryable failure: ${result.error || "Unknown error"}`,
           );
-          return;
+          return; // Do NOT throw — BullMQ will not retry
         }
 
-        // Throw so BullMQ retries the job
+        // ── Transient failure ── log attempt, keep reservation 'reserved', throw to retry
+        await sql`
+          INSERT INTO notification_logs
+            (notification_id, channel, status, provider, error, attempt_number)
+          VALUES
+            (${notificationId}, ${channel}, 'failed', ${result.provider || channel},
+             ${result.error || "Unknown error"}, ${attemptNumber})
+        `;
+
+        // Throw so BullMQ retries the job. Reservation stays 'reserved'.
         throw new Error(
           result.error || `Provider returned failure for ${channel}`,
         );
@@ -149,35 +217,65 @@ function createChannelWorker(channel) {
     },
   );
 
-  // ─── Event handlers ───
+  // ─── Event handlers ───────────────────────────────────────────────────────
 
   worker.on("completed", (job) => {
     console.log(`[${channel}] Job ${job.id} completed`);
   });
 
+  // BullMQ fires 'failed' after every attempt. We only act on the FINAL attempt
+  // (when attemptsMade >= maxAttempts) to log permanently_failed and settle quota.
   worker.on("failed", async (job, err) => {
     console.error(
       `[${channel}] Job ${job?.id} failed (attempt ${job?.attemptsMade}): ${err.message}`,
     );
 
-    // If this was the last attempt, mark as permanently_failed
     const maxAttempts = workerCfg.retries + 1;
     if (job && job.attemptsMade >= maxAttempts) {
+      // Final failure: settle reservation as released, log permanently_failed
       try {
         const sql = getDb();
-        await sql`
-          INSERT INTO notification_logs
-            (notification_id, channel, status, provider, error, attempt_number)
-          VALUES
-            (${job.data.notificationId}, ${channel}, 'permanently_failed', ${channel}, ${err.message}, ${job.attemptsMade})
-        `;
+        const dbClient = await sql.raw.connect();
+        let notifRowPF;
+        try {
+          await dbClient.query("BEGIN");
 
-        await sql`
-          UPDATE notifications
-          SET status = 'failed'
-          WHERE id = ${job.data.notificationId}
-            AND status != 'delivered'
-        `;
+          await dbClient.query(
+            `INSERT INTO notification_logs
+               (notification_id, channel, status, provider, error, attempt_number)
+             VALUES ($1, $2, 'permanently_failed', $3, $4, $5)`,
+            [job.data.notificationId, channel, channel, err.message, job.attemptsMade],
+          );
+
+          const updPF = await dbClient.query(
+            `UPDATE notifications
+             SET status = 'failed'
+             WHERE id = $1 AND status != 'delivered'
+             RETURNING app_id, status, expected_channels, entity_id, parent_entity_id, external_user_id, type`,
+            [job.data.notificationId],
+          );
+          notifRowPF = updPF.rows[0];
+
+          // Settle: release reservation — final failure does not consume quota
+          await settleOnClient(dbClient, {
+            notificationId: job.data.notificationId,
+            channel,
+            outcome: "released",
+          });
+
+          await dbClient.query("COMMIT");
+        } catch (txErr) {
+          await dbClient.query("ROLLBACK").catch(() => {});
+          throw txErr;
+        } finally {
+          dbClient.release();
+        }
+
+        if (notifRowPF) {
+          await _maybeFireNotificationFinal(sql, job.data.notificationId, notifRowPF).catch((e) =>
+            console.warn(`[${channel}] notification.final check failed:`, e.message)
+          );
+        }
 
         console.error(
           `[${channel}] ❌ ${job.data.notificationId} permanently failed after ${maxAttempts} attempts`,
@@ -201,4 +299,49 @@ function createChannelWorker(channel) {
   return worker;
 }
 
-module.exports = { createChannelWorker };
+/**
+ * Check whether all expected channels have a terminal log entry.
+ * If yes, enqueue a `notification.final` webhook event.
+ *
+ * A channel is "settled" when it has a log entry with status in
+ * ('sent', 'failed', 'permanently_failed').
+ */
+async function _maybeFireNotificationFinal(sql, notificationId, notifRow) {
+  if (!notifRow?.app_id) return;
+
+  const expectedChannels = notifRow.expected_channels || [];
+  if (expectedChannels.length === 0) return;
+
+  // Count settled channels for this notification
+  const settledRes = await sql.query(
+    `SELECT DISTINCT channel FROM notification_logs
+     WHERE notification_id = $1
+       AND status IN ('sent', 'failed', 'permanently_failed')`,
+    [notificationId]
+  );
+  const settledChannels = new Set(settledRes.rows.map((r) => r.channel));
+
+  const allSettled = expectedChannels.every((ch) => settledChannels.has(ch));
+  if (!allSettled) return;
+
+  // All channels settled — fire notification.final
+  await enqueueWebhookEvent(sql, {
+    appId: notifRow.app_id,
+    eventType: "notification.final",
+    notificationId,
+    payload: {
+      event: "notification.final",
+      notification_id: notificationId,
+      status: notifRow.status,
+      type: notifRow.type,
+      entity_id: notifRow.entity_id,
+      parent_entity_id: notifRow.parent_entity_id,
+      external_user_id: notifRow.external_user_id,
+      settled_channels: [...settledChannels],
+      expected_channels: expectedChannels,
+      occurred_at: new Date().toISOString(),
+    },
+  });
+}
+
+module.exports = { createChannelWorker, _maybeFireNotificationFinal };

@@ -23,6 +23,10 @@ const {
   buildWhatsAppSendTemplate,
 } = require("../../utils/whatsapp-template");
 const { resolveTemplateAlias } = require("../../utils/template-alias");
+const {
+  appHasQuotas,
+  reserveForChannels,
+} = require("../../utils/quota");
 
 const router = Router();
 
@@ -381,24 +385,107 @@ async function processNotifications(notifications, schedule) {
       const primaryTemplate = templateMap[normalizedChannels[0]];
       const primaryActionUrl = primaryTemplate?.actionUrl || actionUrl || null;
 
+      // ─── Quota reserve ──────────────────────────────────────────────────
+      // Enforce quota for schedule-triggered notifications.
+      // Uses the same owner-resolution logic as /notify: parent_entity_id > entity_id.
+      const quotaOwnerId = resolvedParentEntityId || resolvedEntityId || null;
+      let quotaChannelResults = new Map();
+      let acceptedChannels = [...normalizedChannels];
+
+      if (quotaOwnerId) {
+        try {
+          // Check cache first — skip reserve entirely if app has no quotas
+          const hasQuotas = await appHasQuotas(sql, schedule.client_id);
+          if (hasQuotas) {
+            // We need the notification ID before reserving (for the reservation row).
+            // Pre-generate it so reserve and INSERT can use the same UUID.
+            const preId = require("crypto").randomUUID();
+
+            const channelUnits = new Map(normalizedChannels.map((ch) => [ch, 1]));
+            const reserveResult = await reserveForChannels(sql, {
+              appId: schedule.client_id,
+              ownerId: quotaOwnerId,
+              entityId: resolvedEntityId,
+              notificationId: preId,
+              channelUnits,
+            });
+            quotaChannelResults = reserveResult.channelResults;
+
+            const blockedSet = new Set(
+              [...quotaChannelResults.entries()]
+                .filter(([, r]) => r.blocked)
+                .map(([ch]) => ch),
+            );
+            acceptedChannels = normalizedChannels.filter((ch) => !blockedSet.has(ch));
+
+            if (acceptedChannels.length === 0) {
+              console.warn(
+                `[schedules] All channels quota-blocked for user ${item.user_id} (owner=${quotaOwnerId})`,
+              );
+              failCount++;
+              continue;
+            }
+
+            // Use the pre-generated ID for INSERT
+            item._preId = preId;
+          }
+        } catch (reserveErr) {
+          console.warn(`[schedules] Quota reserve error for user ${item.user_id}: ${reserveErr.message} — proceeding without quota`);
+        }
+      }
+
       // Insert the master notification row
-      const rows = await sql`
-        INSERT INTO notifications
-          (app_id, external_user_id, type, title, message, data, action_url, status)
-        VALUES
-          (${schedule.client_id}, ${item.user_id}, ${schedule.template_key},
-           ${primaryTemplate?.title || null},
-           ${primaryTemplate?.body || null},
-           ${JSON.stringify(payloadData)},
-           ${primaryActionUrl}, 'pending')
-        RETURNING id
-      `;
+      const expectedInternalChannels = acceptedChannels.map(
+        (ch) => toInternalChannel(ch) || ch,
+      );
+      const insertValues = {
+        id: item._preId || undefined,
+        appId: schedule.client_id,
+        userId: item.user_id,
+        type: schedule.template_key,
+        entityId: resolvedEntityId || null,
+        parentEntityId: resolvedParentEntityId || null,
+        title: primaryTemplate?.title || null,
+        body: primaryTemplate?.body || null,
+        data: JSON.stringify(payloadData),
+        actionUrl: primaryActionUrl,
+        expectedChannels: expectedInternalChannels,
+      };
+
+      let rows;
+      if (insertValues.id) {
+        rows = await sql`
+          INSERT INTO notifications
+            (id, app_id, entity_id, parent_entity_id, external_user_id, type,
+             title, message, data, action_url, status, expected_channels)
+          VALUES
+            (${insertValues.id}, ${insertValues.appId}, ${insertValues.entityId},
+             ${insertValues.parentEntityId}, ${insertValues.userId}, ${insertValues.type},
+             ${insertValues.title}, ${insertValues.body},
+             ${insertValues.data}, ${insertValues.actionUrl}, 'pending',
+             ${insertValues.expectedChannels})
+          RETURNING id
+        `;
+      } else {
+        rows = await sql`
+          INSERT INTO notifications
+            (app_id, entity_id, parent_entity_id, external_user_id, type,
+             title, message, data, action_url, status, expected_channels)
+          VALUES
+            (${insertValues.appId}, ${insertValues.entityId},
+             ${insertValues.parentEntityId}, ${insertValues.userId}, ${insertValues.type},
+             ${insertValues.title}, ${insertValues.body},
+             ${insertValues.data}, ${insertValues.actionUrl}, 'pending',
+             ${insertValues.expectedChannels})
+          RETURNING id
+        `;
+      }
 
       const notificationId = rows[0].id;
 
       // Build templatesByChannel — same content for every channel
       const templatesByChannel = {};
-      for (const channel of normalizedChannels) {
+      for (const channel of acceptedChannels) {
         const internalChannel = toInternalChannel(channel);
         if (!internalChannel) {
           continue;
@@ -409,21 +496,46 @@ async function processNotifications(notifications, schedule) {
         };
       }
 
-      const channels = toInternalChannels(normalizedChannels);
+      const channels = toInternalChannels(acceptedChannels);
 
-      await enqueueNotification({
-        notificationId,
-        appId: schedule.client_id,
-        externalUserId: item.user_id,
-        type: schedule.template_key,
-        templatesByChannel,
-        user: payloadUser,
-        actionUrl: primaryActionUrl,
-        data: payloadData,
-        channels,
-        entityId: resolvedEntityId,
-        parentEntityId: resolvedParentEntityId,
-      });
+      try {
+        await enqueueNotification({
+          notificationId,
+          appId: schedule.client_id,
+          externalUserId: item.user_id,
+          type: schedule.template_key,
+          templatesByChannel,
+          user: payloadUser,
+          actionUrl: primaryActionUrl,
+          data: payloadData,
+          channels,
+          entityId: resolvedEntityId,
+          parentEntityId: resolvedParentEntityId,
+        });
+      } catch (enqueueErr) {
+        // Enqueue failed — release quota reservations (best-effort)
+        try {
+          await sql`
+            UPDATE quota_reservations SET status = 'released'
+            WHERE notification_id = ${notificationId} AND status = 'reserved'
+          `;
+          if (quotaOwnerId) {
+            for (const [ch, r] of quotaChannelResults.entries()) {
+              if (!r.blocked && r.periodStart) {
+                await sql`
+                  UPDATE quota_usage
+                  SET reserved = GREATEST(0, reserved - 1), updated_at = now()
+                  WHERE app_id = ${schedule.client_id} AND owner_id = ${quotaOwnerId}
+                    AND channel = ${ch} AND period_start = ${r.periodStart}
+                `;
+              }
+            }
+          }
+        } catch (releaseErr) {
+          console.warn(`[schedules] Failed to release quota after enqueue failure: ${releaseErr.message}`);
+        }
+        throw enqueueErr;
+      }
 
       successCount++;
     } catch (err) {

@@ -1,6 +1,7 @@
 const axios = require("axios");
 const { INotificationProvider } = require("./interface");
 const { META_GRAPH_BASE, META_API_VERSION } = require("../config/meta-graph");
+const { extractPhoneNumbers } = require("../utils/user-destinations");
 
 /**
  * Meta WhatsApp Cloud API Provider
@@ -130,17 +131,84 @@ class MetaWhatsAppProvider extends INotificationProvider {
         error: "META_PHONE_NUMBER_ID_MISSING: No Meta phone number ID provided",
       };
     }
-
-    // Validate recipient phone
-    const recipientPhone = user?.phone;
-    if (!recipientPhone) {
+    // Extract recipient phone(s)
+    const recipientPhones = extractPhoneNumbers(user);
+    if (!recipientPhones || recipientPhones.length === 0) {
       return {
         success: false,
         error: "RECIPIENT_PHONE_MISSING: No recipient phone number provided",
       };
     }
 
-    // Format phone number for Meta API
+    const endpoint = this._buildEndpoint(metaPhoneNumberId);
+    const headers = this._buildHeaders(metaApiKey);
+    const useTemplate = Boolean(templateName && language);
+
+    // Multi-recipient dispatch (e.g. Student + Parent phone numbers)
+    if (recipientPhones.length > 1) {
+      console.info(
+        `[meta-whatsapp] Multi-recipient request: ${recipientPhones.length} numbers mode=${useTemplate ? "template" : "text"} template=${templateName || "none"}`,
+      );
+
+      const messageIds = [];
+      const failures = [];
+
+      for (const phone of recipientPhones) {
+        const formatted = this._formatPhoneNumber(phone);
+        if (!formatted || formatted.length < 7) {
+          failures.push(`INVALID_PHONE_NUMBER: "${phone}"`);
+          continue;
+        }
+
+        const requestBody = useTemplate
+          ? this._buildTemplatePayload(formatted, {
+              templateName,
+              language,
+              parameters,
+            })
+          : this._buildMessagePayload(
+              formatted,
+              actionUrl ? `${body}\n\n🔗 ${actionUrl}` : body,
+            );
+
+        try {
+          const response = await axios.post(endpoint, requestBody, {
+            headers,
+            timeout: 30000,
+          });
+          const mid = response.data?.messages?.[0]?.id || null;
+          if (mid) messageIds.push(mid);
+          console.info(`[meta-whatsapp] ✅ Sent to ${formatted} (id: ${mid})`);
+        } catch (postErr) {
+          const errMsg =
+            postErr.response?.data?.error?.message || postErr.message;
+          failures.push(`${formatted}: ${errMsg}`);
+          console.error(
+            `[meta-whatsapp] ❌ Failed to send to ${formatted}:`,
+            errMsg,
+          );
+        }
+      }
+
+      if (messageIds.length > 0) {
+        return {
+          success: true,
+          providerMessageId: messageIds.join(", "),
+          providerMessageIds: messageIds,
+          totalSent: messageIds.length,
+          totalRecipients: recipientPhones.length,
+          partialErrors: failures.length > 0 ? failures : undefined,
+        };
+      }
+
+      return {
+        success: false,
+        error: `META_DISPATCH_FAILED: Failed to deliver to all ${recipientPhones.length} recipients (${failures.join("; ")})`,
+      };
+    }
+
+    // Single recipient dispatch
+    const recipientPhone = recipientPhones[0];
     const formattedPhone = this._formatPhoneNumber(recipientPhone);
     if (!formattedPhone || formattedPhone.length < 7) {
       return {
@@ -149,9 +217,10 @@ class MetaWhatsAppProvider extends INotificationProvider {
       };
     }
 
-    const endpoint = this._buildEndpoint(metaPhoneNumberId);
-    const headers = this._buildHeaders(metaApiKey);
-    const useTemplate = Boolean(templateName && language);
+    console.info(
+      `[meta-whatsapp] Request mode=${useTemplate ? "template" : "text"} template=${templateName || "none"} language=${language || "none"} to=${formattedPhone} parameter_components=${Array.isArray(parameters) ? parameters.length : 0}`,
+    );
+
     const requestBody = useTemplate
       ? this._buildTemplatePayload(formattedPhone, {
           templateName,
@@ -162,6 +231,13 @@ class MetaWhatsAppProvider extends INotificationProvider {
           formattedPhone,
           actionUrl ? `${body}\n\n🔗 ${actionUrl}` : body,
         );
+
+    if (useTemplate) {
+      console.info(
+        `[meta-whatsapp] Template "${templateName}" parameters sent to Meta:`,
+        JSON.stringify(requestBody.template?.components || [], null, 2),
+      );
+    }
 
     try {
       const response = await axios.post(endpoint, requestBody, {
@@ -183,32 +259,71 @@ class MetaWhatsAppProvider extends INotificationProvider {
         errorData?.message || err.response?.data?.message || err.message;
       const errorCode = errorData?.code;
 
+      console.error(
+        `[meta-whatsapp] Meta API call failed (status=${status || err.code || "unknown"}, code=${errorCode || "none"}): ${errorMessage}`,
+        JSON.stringify(
+          {
+            errorCode,
+            errorMessage,
+            errorDetails: errorData || err.response?.data,
+            sentComponents: requestBody?.template?.components || null,
+          },
+          null,
+          2,
+        ),
+      );
+
       // Map common Meta API errors to actionable messages
       if (status === 401 || errorCode === 190) {
         return {
           success: false,
           error: `META_AUTH_FAILED: Invalid or expired access token`,
+          errorCode,
+          errorMessage,
+          errorData,
         };
       }
 
       if (status === 400) {
+        if (errorCode === 132000) {
+          console.error(
+            `[meta-whatsapp] ❌ PARAMETER MISMATCH (#132000): Number of parameters sent does not match what Meta expects for template "${templateName}". Sent components:`,
+            JSON.stringify(requestBody?.template?.components || [], null, 2),
+          );
+        }
+        if (errorCode === 131008) {
+          console.error(
+            `[meta-whatsapp] ❌ REQUIRED PARAMETER MISSING (#131008): Template "${templateName}" is missing a required parameter. Sent components:`,
+            JSON.stringify(requestBody?.template?.components || [], null, 2),
+          );
+        }
+
         // Check for specific Meta error codes
         if (errorCode === 131030) {
           return {
             success: false,
             error: `META_RECIPIENT_NOT_WHATSAPP: Recipient ${formattedPhone} is not on WhatsApp`,
+            errorCode,
+            errorMessage,
+            errorData,
           };
         }
         if (errorCode === 131047) {
           return {
             success: false,
             error: `META_REENGAGEMENT_REQUIRED: More than 24h since last user message`,
+            errorCode,
+            errorMessage,
+            errorData,
           };
         }
         if (errorCode === 131051) {
           return {
             success: false,
             error: `META_UNSUPPORTED_MESSAGE: Message type not supported`,
+            errorCode,
+            errorMessage,
+            errorData,
           };
         }
         return {
@@ -216,6 +331,8 @@ class MetaWhatsAppProvider extends INotificationProvider {
           error: `META_BAD_REQUEST: ${errorMessage}`,
           errorCode,
           errorMessage,
+          errorData,
+          sentComponents: requestBody?.template?.components || null,
         };
       }
 

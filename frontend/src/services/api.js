@@ -405,6 +405,122 @@ class ApiClient {
       `/template-aliases/${encodeURIComponent(id)}`,
     );
   }
+
+  // ── Quota: Profiles ──
+  getQuotaProfiles() {
+    return this.#request("GET", "/quota/profiles");
+  }
+
+  createQuotaProfile(data) {
+    return this.#request("POST", "/quota/profiles", { body: data });
+  }
+
+  updateQuotaProfile(id, data) {
+    return this.#request("PUT", `/quota/profiles/${id}`, { body: data });
+  }
+
+  deleteQuotaProfile(id, { reassign_to } = {}) {
+    return this.#request("DELETE", `/quota/profiles/${id}`, { params: { reassign_to } });
+  }
+
+  upsertProfileLimit(profileId, data) {
+    return this.#request("POST", `/quota/profiles/${profileId}/limits`, { body: data });
+  }
+
+  deleteProfileLimit(profileId, channel) {
+    return this.#request("DELETE", `/quota/profiles/${profileId}/limits/${channel}`);
+  }
+
+  // ── Quota: Owners ──
+  /**
+   * @param {object} opts
+   * @param {string} [opts.q]          — search owner_id or label
+   * @param {string} [opts.profile_id] — filter by profile
+   * @param {number} [opts.page]
+   * @param {number} [opts.limit]
+   */
+  getQuotaOwners({ q, profile_id, page = 1, limit = 20 } = {}) {
+    return this.#request("GET", "/quota/owners", { params: { q, profile_id, page, limit } });
+  }
+
+  getQuotaOwner(ownerId) {
+    return this.#request("GET", `/quota/owners/${encodeURIComponent(ownerId)}`);
+  }
+
+  upsertOwnerQuota(ownerId, data) {
+    return this.#request("PUT", `/quota/owners/${encodeURIComponent(ownerId)}`, { body: data });
+  }
+
+  deleteOwnerQuota(ownerId) {
+    return this.#request("DELETE", `/quota/owners/${encodeURIComponent(ownerId)}`);
+  }
+
+  bulkAssignOwners(data) {
+    return this.#request("POST", "/quota/owners/bulk", { body: data });
+  }
+
+  getOwnerBranches(ownerId) {
+    return this.#request("GET", `/quota/owners/${encodeURIComponent(ownerId)}/branches`);
+  }
+
+  // ── Quota: Owner-scoped (entities) ──
+  getEntityQuota(ownerId, { include } = {}) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/quota`, { params: { include } });
+  }
+
+  getEntityStats(ownerId, { from, to, channel, type, entity_id, group_by } = {}) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/stats`, {
+      params: { from, to, channel, type, entity_id, group_by },
+    });
+  }
+
+  getEntityNotifications(ownerId, { from, to, channel, status, type, entity_id, cursor, limit } = {}) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/notifications`, {
+      params: { from, to, channel, status, type, entity_id, cursor, limit },
+    });
+  }
+
+  getEntityNotification(ownerId, notificationId) {
+    return this.#request("GET", `/entities/${encodeURIComponent(ownerId)}/notifications/${notificationId}`);
+  }
+
+  // ── Quota: Usage ──
+  getQuotaUsage({ owner_id, channel, period_start } = {}) {
+    return this.#request("GET", "/quota/usage", { params: { owner_id, channel, period_start } });
+  }
+
+  getThresholdEvents({ owner_id, channel, limit } = {}) {
+    return this.#request("GET", "/quota/thresholds", { params: { owner_id, channel, limit } });
+  }
+
+  // ── Webhooks ──
+  getWebhookConfig() {
+    return this.#request("GET", "/webhooks/config");
+  }
+
+  createWebhookConfig(data) {
+    return this.#request("POST", "/webhooks/config", { body: data });
+  }
+
+  updateWebhookConfig(data) {
+    return this.#request("PATCH", "/webhooks/config", { body: data });
+  }
+
+  deleteWebhookConfig() {
+    return this.#request("DELETE", "/webhooks/config");
+  }
+
+  getWebhookDeliveries({ status, event_type, page, limit } = {}) {
+    return this.#request("GET", "/webhooks/deliveries", { params: { status, event_type, page, limit } });
+  }
+
+  getWebhookDelivery(id) {
+    return this.#request("GET", `/webhooks/deliveries/${id}`);
+  }
+
+  retryWebhookDelivery(id) {
+    return this.#request("POST", `/webhooks/deliveries/${id}/retry`);
+  }
 }
 
 export const api = new ApiClient();

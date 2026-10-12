@@ -29,6 +29,9 @@ function createPgSocket() {
     });
   };
 
+  // Keep the TCP connection alive so Neon does not close it during idle periods
+  socket.setKeepAlive(true, 30_000); // send keep-alive every 30 s
+
   return socket;
 }
 
@@ -134,6 +137,9 @@ function getDb() {
       stream: createPgSocket,
       connectionTimeoutMillis: config.database.connectionTimeoutMs || 30000,
       idleTimeoutMillis: 60000, // release idle clients after 60s
+      // min:2 keeps 2 sockets pre-connected on startup, eliminating the ~2s
+      // "New client connected to pool" cold-start penalty seen in Neon logs.
+      min: 2,
       max: 10,
     });
 
@@ -148,6 +154,10 @@ function getDb() {
 
     pool.on("connect", () => {
       console.log("[db] New client connected to pool");
+    });
+
+    pool.on("remove", () => {
+      console.log("[db] Client removed from pool");
     });
 
     sqlClient = createSqlClient(pool);
@@ -260,8 +270,31 @@ async function closePool() {
   }
 }
 
+/**
+ * Pre-warm the pool by acquiring and releasing `min` connections.
+ * Call once during server startup after getDb() is first invoked.
+ * This fires the TCP handshake + TLS + PG auth early so the first
+ * real request does not pay the cold-connection cost (~2s on Neon).
+ */
+async function warmPool() {
+  if (!pool) return;
+  const target = pool.options.min || 2;
+  const clients = [];
+  try {
+    for (let i = 0; i < target; i++) {
+      clients.push(await pool.connect());
+    }
+    console.log(`[db] Pool pre-warmed with ${target} connection(s)`);
+  } catch (err) {
+    console.warn("[db] Pool warm-up failed (non-fatal):", err.message);
+  } finally {
+    for (const c of clients) c.release();
+  }
+}
+
 module.exports = {
   getDb,
+  warmPool,
   executeWithRetry,
   testConnection,
   closePool,
