@@ -332,7 +332,7 @@ async function processSchedule(schedule, client) {
       [schedule.id, schedule.client_id, fetchErr.message],
     );
 
-    return;
+    return []; // Return empty array for enqueue jobs
   }
 
   // ─── FIX 5: Empty notifications array = success ───
@@ -342,8 +342,11 @@ async function processSchedule(schedule, client) {
     notifications,
     client,
   );
+
+  const enqueueJobs = []; // Collect enqueue jobs to execute after COMMIT
   let successCount = 0;
   let failCount = 0;
+
 
   // Process each notification (enqueue is Redis-based, safe inside transaction)
   for (const item of notifications) {
@@ -580,7 +583,8 @@ async function processSchedule(schedule, client) {
         };
       }
 
-      await enqueueNotification({
+      // Collect job for enqueueing after COMMIT (Fix #1: FK Violation)
+      enqueueJobs.push({
         notificationId,
         appId: schedule.client_id,
         externalUserId: item.user_id,
@@ -661,6 +665,8 @@ async function processSchedule(schedule, client) {
     //   `[schedule-worker] Recurring schedule ${schedule.id}: ${successCount}/${total} sent, next run at ${nextRunAt.toISOString()}`,
     // );
   }
+
+  return enqueueJobs; // Return collected jobs for enqueueing after COMMIT
 }
 
 /**
@@ -673,6 +679,8 @@ async function processSchedule(schedule, client) {
 async function pollTick() {
   const sql = getDb();
   const client = await sql.raw.connect();
+
+  const allEnqueueJobs = []; // Collect all enqueue jobs from all schedules
 
   try {
     await client.query("BEGIN");
@@ -694,7 +702,8 @@ async function pollTick() {
 
     for (const schedule of dueSchedules) {
       try {
-        await processSchedule(schedule, client);
+        const jobs = await processSchedule(schedule, client);
+        allEnqueueJobs.push(...jobs);
       } catch (scheduleErr) {
         console.error(
           `[schedule-worker] Unhandled error processing schedule ${schedule.id}:`,
@@ -726,6 +735,21 @@ async function pollTick() {
     }
 
     await client.query("COMMIT");
+
+    // Enqueue all jobs AFTER transaction commits (Fix #1: FK Violation)
+    for (const job of allEnqueueJobs) {
+      try {
+        await enqueueNotification(job);
+      } catch (enqueueErr) {
+        console.error(
+          `[schedule-worker] Failed to enqueue notification ${job.notificationId}:`,
+          enqueueErr.message
+        );
+        // Job lost for now, but notification row persists in database
+        // User can still trigger manually via API
+        // TODO: Consider retry mechanism or dead letter queue
+      }
+    }
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     console.error(
