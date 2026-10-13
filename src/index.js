@@ -109,7 +109,7 @@ async function bootstrapByMode(runtime) {
 
   bootstrapProviders();
 
-  if (runtime.runApi) {
+  if (runtime.runApi || runtime.runWorkers) {
     createQueues();
   }
 

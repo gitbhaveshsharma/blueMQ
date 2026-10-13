@@ -558,7 +558,7 @@ async function processSchedule(schedule, client) {
 
       // Record quota_reservations rows (non-critical; stale cleanup will handle failures)
       for (const qr of quotaReservations) {
-        client.query(
+        await client.query(
           `INSERT INTO quota_reservations
              (notification_id, app_id, owner_id, entity_id, channel, units, period_start)
            VALUES ($1, $2, $3, $4, $5, 1, $6)
