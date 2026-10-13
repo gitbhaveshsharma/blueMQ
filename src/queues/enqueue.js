@@ -1,4 +1,32 @@
 const { getQueue } = require("./index");
+const crypto = require("crypto");
+
+/**
+ * Generate a hash of notification content for job deduplication.
+ * Same content → same hash → true duplicate (rejected by BullMQ).
+ * Different content → different hash → separate jobs (both sent).
+ * 
+ * @param {object} payload - Job payload with title, body, data, actionUrl
+ * @returns {string} - 8-character hex hash (32-bit entropy)
+ */
+function generateContentHash(payload) {
+  const { title, body, data, actionUrl } = payload;
+  
+  // Normalize to JSON string for consistent hashing
+  // Null/undefined values become empty string/object for deterministic behavior
+  const content = JSON.stringify({
+    title: title || '',
+    body: body || '',
+    data: data || {},
+    actionUrl: actionUrl || '',
+  });
+  
+  return crypto
+    .createHash('md5')
+    .update(content, 'utf8')
+    .digest('hex')
+    .substring(0, 8); // First 8 chars = 32-bit hash = 4 billion combinations
+}
 
 /**
  * Enqueue notification jobs for the requested channels.
@@ -76,11 +104,14 @@ async function enqueueNotification(opts) {
       parameters: template.parameters || null,
     };
 
+    // Generate content hash for deduplication
+    const contentHash = generateContentHash(jobPayload);
+
     await queue.add(
       `${type}:${channel}`, // job name (for dashboard / debugging)
       { ...jobPayload, channel }, // job data
       {
-        jobId: `${notificationId}__${channel}`, // dedupe key (BullMQ custom id cannot contain ":")
+        jobId: `${notificationId}__${channel}__${contentHash}`, // dedupe key with content hash
       },
     );
 
