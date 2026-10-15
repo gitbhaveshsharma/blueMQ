@@ -21,6 +21,8 @@ const {
   buildWhatsAppSendTemplate,
   summarizeWhatsAppVariables,
   summarizeWhatsAppTemplate,
+  createVariableMapper,
+  resolveNotificationTypeToWhatsAppTemplate,
 } = require("../../utils/whatsapp-template");
 const { resolveTemplateAlias } = require("../../utils/template-alias");
 const {
@@ -132,9 +134,55 @@ async function prepareTemplates({
     templateRowsByChannel[channel].push(template);
   }
 
-  const whatsappTemplateName = resolvedTypeByChannel.whatsapp || type;
+  // Resolve WhatsApp template name (may be different from notification type)
+  const baseWhatsappType = resolvedTypeByChannel.whatsapp || type;
+  
+  // Try to find a mapped WhatsApp template name based on notification_type and conditions
+  let whatsappTemplateName = baseWhatsappType;
   let whatsappCache = null;
+  let whatsappVariableMapper = null;
+  
   if (channels.includes("whatsapp")) {
+    // Extract condition from variables (e.g., due_offset_days from fee notifications)
+    // Common condition keys: due_offset_days, request_status, etc.
+    let conditionKey = null;
+    let conditionValue = null;
+    
+    // Check for common condition variables
+    if (variables?.due_offset_days !== undefined) {
+      conditionKey = 'due_offset_days';
+      conditionValue = String(variables.due_offset_days);
+    } else if (variables?.request_status !== undefined) {
+      conditionKey = 'request_status';
+      conditionValue = String(variables.request_status);
+    }
+    
+    console.info(
+      `[notify] WhatsApp template lookup: ` +
+      `type="${type}" ` +
+      `baseType="${baseWhatsappType}" ` +
+      `conditionKey="${conditionKey}" ` +
+      `conditionValue="${conditionValue}"`
+    );
+    
+    // Try to resolve notification_type to WhatsApp-specific template name
+    const mappedName = await resolveNotificationTypeToWhatsAppTemplate({
+      appId,
+      entityId,
+      parentEntityId,
+      notificationType: baseWhatsappType,
+      conditionKey,
+      conditionValue,
+    });
+    
+    // Use mapped name if found, otherwise use base type
+    whatsappTemplateName = mappedName || baseWhatsappType;
+    
+    console.info(
+      `[notify] WhatsApp template selected: "${whatsappTemplateName}"` +
+      `${mappedName ? ' (mapped from notification_type)' : ' (direct, no mapping)'}`
+    );
+    
     const language =
       variables?.language || variables?.whatsapp_language || null;
     whatsappCache = await findCachedSendableTemplate({
@@ -144,6 +192,18 @@ async function prepareTemplates({
       name: whatsappTemplateName,
       language,
     });
+    
+    // Create variable mapper for batch reuse
+    if (whatsappCache?.components) {
+      const mapperStart = Date.now();
+      whatsappVariableMapper = createVariableMapper(whatsappCache.components);
+      const mapperDuration = Date.now() - mapperStart;
+      
+      console.info(
+        `[whatsapp-template] Created variable mapper template="${whatsappTemplateName}" ` +
+        `components=${whatsappCache.components.length} duration_ms=${mapperDuration}`,
+      );
+    }
   }
 
   const templateMap = {};
@@ -196,8 +256,8 @@ async function prepareTemplates({
           actionUrl: variables?.cta_url || null,
         };
   }
-
-  return { templateMap, resolvedChannels: channels };
+  return { templateMap, resolvedChannels: channels, whatsappVariableMapper, whatsappComponents: whatsappCache?.components || null };
+  return { templateMap, resolvedChannels: channels, whatsappVariableMapper };
 }
 
 // ─── Idempotency helpers ──────────────────────────────────────────────────────
@@ -778,3 +838,4 @@ router.post("/", notifyHandler);
 
 module.exports = router;
 module.exports.notifyHandler = notifyHandler;
+module.exports.prepareTemplates = prepareTemplates;

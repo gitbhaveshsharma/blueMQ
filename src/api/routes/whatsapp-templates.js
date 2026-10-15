@@ -12,6 +12,8 @@ const {
   parseComponentsPayload,
   extractMetaTemplateVars,
 } = require("../../utils/whatsapp-template");
+const { invalidateEntityTemplates } = require("../../utils/template-cache-invalidation");
+
 
 const router = Router();
 
@@ -31,6 +33,14 @@ router.post("/sync", async (req, res) => {
     const result = await syncMetaTemplates({ appId, entityId });
     if (result.error && result.total === undefined) {
       return sendMetaError(res, result.error);
+    }
+
+    
+    // Invalidate cached templates for this entity after sync
+    if (result.total > 0 || result.pruned > 0) {
+      await invalidateEntityTemplates(appId, result.entityId).catch(err => {
+        console.error("[whatsapp-templates] Cache invalidation failed:", err.message);
+      });
     }
 
     const status = result.truncated ? 207 : 200;

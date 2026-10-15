@@ -9,6 +9,7 @@ const {
   membersToCsv,
 } = require("../../utils/audience-member");
 const { notifyHandler } = require("./notify");
+const { batchNormalizeWhatsAppVariables } = require("../../utils/whatsapp-template");
 
 const router = Router();
 const UUID_RE =
@@ -581,11 +582,34 @@ router.post("/:id/notify", async (req, res) => {
       });
     }
 
+    const broadcastStart = Date.now();
+    const notificationPreparation = new Map();
+    
+    // Prepare templates once before processing members
+    const { prepareTemplates } = require("./notify");
+    const prepared = await prepareTemplates({
+      appId: req.appId,
+      channels,
+      entityId: entity_id,
+      parentEntityId: parent_entity_id,
+      type,
+      variables,
+    });
+    
+    const { templateMap, resolvedChannels, whatsappVariableMapper, whatsappComponents } = prepared;
+    const preparationDuration = Date.now() - broadcastStart;
+    
+    console.info(
+      `[audiences-broadcast] Templates prepared audience_id="${req.params.id}" ` +
+      `channels=${JSON.stringify(resolvedChannels)} duration_ms=${preparationDuration} ` +
+      `has_whatsapp_mapper=${!!whatsappVariableMapper}`
+    );
+
     let cursor = null;
     let queued = 0;
     let skipped = 0;
     const errors = [];
-    const notificationPreparation = new Map();
+    let totalMappingTime = 0;
 
     for (;;) {
       const members = cursor
@@ -611,15 +635,62 @@ router.post("/:id/notify", async (req, res) => {
 
       for (let start = 0; start < members.length; start += BROADCAST_CONCURRENCY) {
         const batch = members.slice(start, start + BROADCAST_CONCURRENCY);
+        
+        // Use batch processing if WhatsApp components are available
+        let batchMappingResults = null;
+        if (resolvedChannels.includes('whatsapp') && whatsappComponents) {
+          const mappingStart = Date.now();
+          
+          // Build variables for each member
+          const batchVariables = batch.map(member => ({
+            ...variables,
+            user_id: member.user_id,
+            email: member.email,
+            phone: member.phone,
+          }));
+          
+          // Apply batch normalization once for entire batch
+          batchMappingResults = batchNormalizeWhatsAppVariables(whatsappComponents, batchVariables);
+          totalMappingTime += Date.now() - mappingStart;
+          
+          console.info(
+            `[audiences-broadcast] Batch WhatsApp processing batch_size=${batch.length} ` +
+            `duration_ms=${Date.now() - mappingStart}`
+          );
+        }
+        
         const results = await Promise.all(
-          batch.map((member) =>
-            invokeNotifyHandler(
+          batch.map((member, index) => {
+            // Use pre-computed mapping result if available
+            let memberVariables = variables;
+            if (batchMappingResults && batchMappingResults[index]) {
+              const mappingResult = batchMappingResults[index];
+              
+              // Check for missing variables
+              if (mappingResult.missing && mappingResult.missing.length > 0) {
+                const missingVars = mappingResult.missing
+                  .map(m => m.variable || `{{${m.index}}}`)
+                  .join(', ');
+                console.warn(
+                  `[audiences-broadcast] Skipping member user_id="${member.user_id}" ` +
+                  `missing_variables="${missingVars}"`
+                );
+                return Promise.resolve({
+                  status: 400,
+                  body: { error: `Missing WhatsApp variables: ${missingVars}` },
+                });
+              }
+              
+              memberVariables = mappingResult.variables;
+            }
+            
+            return invokeNotifyHandler(
               req,
               {
                 user_id: member.user_id,
                 type,
-                channels,
-                variables,
+                channels: resolvedChannels,
+                variables: memberVariables,
                 user: {
                   ...(member.email ? { email: member.email } : {}),
                   ...(member.phone ? { phone: member.phone } : {}),
@@ -632,9 +703,10 @@ router.post("/:id/notify", async (req, res) => {
                 parent_entity_id,
               },
               notificationPreparation,
-            ),
-          ),
+            );
+          }),
         );
+        
         results.forEach((result, index) => {
           if (result.status >= 200 && result.status < 300) queued += 1;
           else {
@@ -653,6 +725,15 @@ router.post("/:id/notify", async (req, res) => {
       if (members.length < BROADCAST_PAGE_SIZE) break;
     }
 
+    const broadcastDuration = Date.now() - broadcastStart;
+    
+    console.info(
+      `[audiences-broadcast] Broadcast completed audience_id="${req.params.id}" ` +
+      `queued=${queued} skipped=${skipped} ` +
+      `preparation_ms=${preparationDuration} mapping_ms=${totalMappingTime} ` +
+      `total_ms=${broadcastDuration}`
+    );
+
     if (queued === 0 && skipped === 0) {
       return res.status(400).json({ error: "This audience has no members" });
     }
@@ -663,6 +744,11 @@ router.post("/:id/notify", async (req, res) => {
       queued,
       skipped,
       errors,
+      performance: {
+        preparation_ms: preparationDuration,
+        mapping_ms: totalMappingTime,
+        total_ms: broadcastDuration,
+      },
     });
   } catch (err) {
     console.error("[audiences] notify error:", err);
