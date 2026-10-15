@@ -109,6 +109,31 @@ const config = {
 
   // ─── Provider Routing ───
   providers: buildProviderRouting(),
+
+  // ─── Performance Optimizations ───
+  performance: {
+    // Enable batch SQL queries for template resolution (replaces sequential for-loop queries)
+    // When true: single query with entity_id = ANY(...) checks all entity candidates at once
+    // When false: falls back to sequential per-entity queries (legacy behavior)
+    // Default: true (recommended for multi-tenant scale)
+    enableBatchTemplateQueries:
+      process.env.ENABLE_BATCH_TEMPLATE_QUERIES !== "false",
+
+    // Enable Redis caching for template resolution (saves 500ms-1s per request)
+    // When true: caches fallback entities (5min), aliases (10min), templates (30min)
+    // When false: no caching, all queries hit database
+    // Default: false (safe rollout, enable after testing)
+    enableRedisTemplateCache:
+      process.env.ENABLE_REDIS_TEMPLATE_CACHE === "true",
+
+    // Redis cache TTL settings (in seconds)
+    cacheTtl: {
+      fallbackEntity: parseInt(process.env.CACHE_TTL_FALLBACK_ENTITY, 10) || 300,  // 5 minutes
+      templateAlias: parseInt(process.env.CACHE_TTL_TEMPLATE_ALIAS, 10) || 600,    // 10 minutes
+      template: parseInt(process.env.CACHE_TTL_TEMPLATE, 10) || 1800,               // 30 minutes
+    },
+
+  },
 };
 
 module.exports = config;

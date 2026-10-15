@@ -5,6 +5,11 @@ const {
   normalizeEntityId,
   resolveWhatsAppSession,
 } = require("../../utils/whatsapp-session");
+const {
+  invalidateFallbackEntity,
+  invalidateEntityCache,
+} = require("../../utils/template-cache-invalidation");
+
 
 const router = Router();
 
@@ -131,6 +136,16 @@ router.post("/sessions", async (req, res) => {
     } finally {
       client.release();
     }
+
+    // Invalidate caches after session configuration
+    if (fallback) {
+      await invalidateFallbackEntity(appId).catch(err => {
+        console.error("[whatsapp-sessions] Fallback cache invalidation failed:", err.message);
+      });
+    }
+    await invalidateEntityCache(appId, normalizedEntityId).catch(err => {
+      console.error("[whatsapp-sessions] Entity cache invalidation failed:", err.message);
+    });
 
     return res.status(201).json({
       success: true,
@@ -366,6 +381,11 @@ router.delete("/sessions/:entity_id", async (req, res) => {
       WHERE app_id = ${appId}
         AND entity_id = ${entityId}
     `;
+
+    // Invalidate all caches for deleted session
+    await invalidateEntityCache(appId, entityId).catch(err => {
+      console.error("[whatsapp-sessions] Entity cache invalidation failed:", err.message);
+    });
 
     return res.json({ success: true });
   } catch (err) {

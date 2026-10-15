@@ -1,4 +1,5 @@
 const { getDb } = require("../db");
+const config = require("../config");
 const {
   normalizePublicChannel,
   getTemplateChannelCandidates,
@@ -200,6 +201,61 @@ async function resolveTemplateAlias({
     }
   }
 
+  // ========================================================================
+  // PHASE 1 OPTIMIZATION: Batch query when feature flag enabled
+  // ========================================================================
+  if (config.performance?.enableBatchTemplateQueries) {
+    const startTime = Date.now();
+    
+    // Single batch query checking all scopes at once
+    const rows = await sql`
+      SELECT resolves_to, entity_id
+      FROM template_alias
+      WHERE app_id = ${appId}
+        AND channel = ${normalizedChannel}
+        AND entity_id = ANY(${scopes})
+        AND notification_type = ${notificationType}
+      ORDER BY array_position(${scopes}::text[], entity_id)
+      LIMIT 1
+    `;
+    
+    const duration = Date.now() - startTime;
+    
+    if (rows[0]?.resolves_to) {
+      console.info(
+        `[template-alias] ✓ Resolved alias batch query ` +
+        `app_id="${appId}" channel="${normalizedChannel}" ` +
+        `type="${notificationType}" → "${rows[0].resolves_to}" ` +
+        `entity_id="${rows[0].entity_id}" duration_ms=${duration}`
+      );
+      return {
+        templateName: rows[0].resolves_to,
+        aliased: true,
+        channel: normalizedChannel,
+        entityId: rows[0].entity_id || null,
+      };
+    }
+    
+    console.info(
+      `[template-alias] No alias found (batch) ` +
+      `app_id="${appId}" channel="${normalizedChannel}" ` +
+      `type="${notificationType}" scopes=${scopes.length} duration_ms=${duration}`
+    );
+    
+    return {
+      templateName: notificationType,
+      aliased: false,
+      channel: normalizedChannel,
+      entityId:
+        normalizedChannel === "whatsapp"
+          ? entityId || parentEntityId || null
+          : null,
+    };
+  }
+
+  // ========================================================================
+  // LEGACY: Sequential queries (one per scope)
+  // ========================================================================
   for (const scope of scopes) {
     const rows = await sql`
       SELECT resolves_to

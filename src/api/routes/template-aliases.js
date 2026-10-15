@@ -1,4 +1,5 @@
 const { Router } = require("express");
+const { getDb } = require("../../db");
 const {
   validateAliasInput,
   listTemplateAliases,
@@ -6,6 +7,8 @@ const {
   deleteTemplateAlias,
   templateAliasTargetExists,
 } = require("../../utils/template-alias");
+const { invalidateTemplateAlias } = require("../../utils/template-cache-invalidation");
+
 
 const router = Router();
 
@@ -63,6 +66,17 @@ async function writeAlias(req, res) {
   if (!row) {
     return res.status(404).json({ error: "Template alias not found" });
   }
+  
+  // Invalidate cached alias after save
+  await invalidateTemplateAlias(
+    req.appId,
+    input.channel,
+    entityId,
+    input.notification_type
+  ).catch(err => {
+    console.error("[template-aliases] Cache invalidation failed:", err.message);
+  });
+
   return res.status(req.params.id ? 200 : 201).json({
     success: true,
     data: row,
@@ -94,6 +108,16 @@ router.put("/:id", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   try {
+    // Get alias info before deletion for cache invalidation
+    const sql = getDb();
+    const aliases = await sql`
+      SELECT channel, entity_id, notification_type
+      FROM template_aliases
+      WHERE id = ${req.params.id} AND app_id = ${req.appId}
+      LIMIT 1
+    `;
+    const alias = aliases[0];
+
     const deleted = await deleteTemplateAlias({
       id: req.params.id,
       appId: req.appId,
@@ -101,6 +125,19 @@ router.delete("/:id", async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: "Template alias not found" });
     }
+
+    // Invalidate cached alias after deletion
+    if (alias) {
+      await invalidateTemplateAlias(
+        req.appId,
+        alias.channel,
+        alias.entity_id,
+        alias.notification_type
+      ).catch(err => {
+        console.error("[template-aliases] Cache invalidation failed:", err.message);
+      });
+    }
+
     return res.json({ success: true });
   } catch (err) {
     console.error("[template-aliases] DELETE /:id error:", err);
