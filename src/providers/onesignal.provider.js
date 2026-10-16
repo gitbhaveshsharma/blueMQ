@@ -2,6 +2,7 @@ const axios = require("axios");
 const { INotificationProvider } = require("./interface");
 const config = require("../config");
 const { buildEmailHtml } = require("../utils/email");
+const { extractPhoneNumbers } = require("../utils/user-destinations");
 
 const ONESIGNAL_API = "https://onesignal.com/api/v1";
 
@@ -107,13 +108,17 @@ class OneSignalProvider extends INotificationProvider {
   async sendSMS(payload) {
     const { body, user } = payload;
 
-    if (!user.phone) {
+    // Extract phone numbers (supports single string, array, or comma-separated)
+    const recipientPhones = extractPhoneNumbers(user);
+    
+    if (!recipientPhones || recipientPhones.length === 0) {
       return { success: false, error: "User has no phone number" };
     }
 
+    // OneSignal supports sending to multiple phone numbers in a single API call
     const reqBody = {
       app_id: this.appId,
-      include_phone_numbers: [user.phone],
+      include_phone_numbers: recipientPhones,
       name: "BlueMQ SMS",
       sms_from: config.onesignal.smsFrom || undefined,
       contents: { en: body },
@@ -123,6 +128,13 @@ class OneSignalProvider extends INotificationProvider {
       const res = await axios.post(`${ONESIGNAL_API}/notifications`, reqBody, {
         headers: this._headers(),
       });
+
+      // Log multi-recipient info if applicable
+      if (recipientPhones.length > 1) {
+        console.info(
+          `[onesignal-sms] Multi-recipient: sent to ${recipientPhones.length} numbers`
+        );
+      }
 
       return {
         success: true,
