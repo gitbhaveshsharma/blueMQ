@@ -18,6 +18,7 @@ const {
   findCachedSendableTemplate,
   isSendableStatus,
   buildWhatsAppSendTemplate,
+  resolveNotificationTypeToWhatsAppTemplate,
 } = require("../utils/whatsapp-template");
 const { resolveTemplateAlias } = require("../utils/template-alias");
 const {
@@ -390,6 +391,8 @@ async function processSchedule(schedule, client) {
             templateVariables?.language ||
             templateVariables?.whatsapp_language ||
             null;
+          
+          // Resolve template alias first
           const alias = await resolveTemplateAlias({
             appId: schedule.client_id,
             channel,
@@ -397,16 +400,55 @@ async function processSchedule(schedule, client) {
             parentEntityId: resolvedParentEntityId,
             notificationType: schedule.template_key,
           });
+          
+          // Extract conditions from template variables
+          let conditionKey = null;
+          let conditionValue = null;
+          if (templateVariables?.due_offset_days !== undefined) {
+            conditionKey = 'due_offset_days';
+            conditionValue = String(templateVariables.due_offset_days);
+          } else if (templateVariables?.request_status !== undefined) {
+            conditionKey = 'request_status';
+            conditionValue = String(templateVariables.request_status);
+          }
+          
+          console.info(
+            `[schedule-worker] WhatsApp template resolution: ` +
+            `schedule="${schedule.name}" ` +
+            `template_key="${schedule.template_key}" ` +
+            `alias="${alias.templateName}" ` +
+            `conditionKey="${conditionKey}" ` +
+            `conditionValue="${conditionValue}"`
+          );
+          
+          // Resolve notification_type to WhatsApp-specific template name
+          const mappedName = await resolveNotificationTypeToWhatsAppTemplate({
+            appId: schedule.client_id,
+            entityId: resolvedEntityId,
+            parentEntityId: resolvedParentEntityId,
+            notificationType: alias.templateName,
+            conditionKey,
+            conditionValue,
+          });
+          
+          // Use mapped name if found, otherwise use alias
+          const finalTemplateName = mappedName || alias.templateName;
+          
+          console.info(
+            `[schedule-worker] WhatsApp template selected: "${finalTemplateName}"` +
+            `${mappedName ? ' (mapped)' : ' (direct)'}`
+          );
+          
           const cacheRow = await findCachedSendableTemplate({
             appId: schedule.client_id,
             entityId: resolvedEntityId,
             parentEntityId: resolvedParentEntityId,
-            name: alias.templateName,
+            name: finalTemplateName,
             language,
           });
           if (!cacheRow || !isSendableStatus(cacheRow.status)) {
             console.warn(
-              `[schedule-worker] WhatsApp template "${alias.templateName}" missing or not sendable in cache`,
+              `[schedule-worker] WhatsApp template "${finalTemplateName}" missing or not sendable in cache`,
             );
           }
           templateMap[channel] = buildWhatsAppSendTemplate({
