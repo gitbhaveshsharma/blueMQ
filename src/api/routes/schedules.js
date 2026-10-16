@@ -1,6 +1,8 @@
 const { Router } = require("express");
 const { getDb } = require("../../db");
 const { authMiddleware } = require("../middlewares/auth");
+const { endpointRateLimiter } = require("../middlewares/rate-limiting");
+const securityConfig = require("../../config/security.config");
 const { resolveScheduleConfig } = require("../../utils/config-resolver.util");
 const {
   computeNextRun,
@@ -993,7 +995,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 //  retry_count, last_run_status, last_run_at, next_run_at,
 //  or status on the schedule row.
 // ─────────────────────────────────────────────────────────────
-router.post("/:id/trigger", authMiddleware, async (req, res) => {
+router.post("/:id/trigger", authMiddleware, endpointRateLimiter("schedules-trigger", { ...securityConfig.rateLimiting.schedulesTrigger, trackBy: "apiKey" }), async (req, res) => {
   try {
     const sql = getDb();
 
