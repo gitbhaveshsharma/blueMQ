@@ -33,7 +33,7 @@ async function incrementThreatScore(ip, reason, points) {
   const updatedScore = parseInt(await getWithFallback(scoreKey, '0'), 10) + actualIncrement;
   
   // Update the score to correct value
-  const redis = require('../queues/connection').getRedis();
+  const redis = require('../../queues/connection').getRedisConnection();
   await redis.incrby(scoreKey, actualIncrement - 1); // -1 because incrementWithTTL already added 1
   
   // Log the incident

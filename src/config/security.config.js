@@ -82,7 +82,7 @@ function parseIPList(name) {
   const items = raw.split(',').map(item => item.trim()).filter(Boolean);
 
   // Basic validation (IPv4, IPv6, CIDR notation)
-  const ipPattern = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$|^([0-9a-fA-F:]+)(\/\d{1,3})?$|^::1$|^localhost$/;
+  const ipPattern = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$|^([0-9a-fA-F:.]+)(\/\d{1,3})?$|^::1$|^localhost$/;
   
   items.forEach(ip => {
     if (!ipPattern.test(ip)) {

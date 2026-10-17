@@ -106,20 +106,20 @@ function registerRoutes(app) {
     notifyRoutes
   );
   
-  app.use("/notifications", authMiddleware, notificationsRoutes);
-  app.use("/templates", authMiddleware, templatesRoutes);
-  app.use("/whatsapp", authMiddleware, whatsappSessionsRoutes);
+  app.use("/notifications", bruteForceProtectionMiddleware, authMiddleware, notificationsRoutes);
+  app.use("/templates", bruteForceProtectionMiddleware, authMiddleware, templatesRoutes);
+  app.use("/whatsapp", bruteForceProtectionMiddleware, authMiddleware, whatsappSessionsRoutes);
   app.use("/settings", settingsRoutes);
   
   // Schedules with trigger endpoint rate limiting
-  app.use("/schedules", authMiddleware, schedulesRoutes);
+  app.use("/schedules", bruteForceProtectionMiddleware, authMiddleware, schedulesRoutes);
   
-  app.use("/audiences", authMiddleware, audiencesRoutes);
-  app.use("/whatsapp-templates", authMiddleware, whatsappTemplatesRoutes);
-  app.use("/template-aliases", authMiddleware, templateAliasesRoutes);
-  app.use("/quota", authMiddleware, quotaRoutes);
-  app.use("/webhooks", authMiddleware, webhookConfigRoutes);
-  app.use("/entities", authMiddleware, entitiesRoutes);
+  app.use("/audiences", bruteForceProtectionMiddleware, authMiddleware, audiencesRoutes);
+  app.use("/whatsapp-templates", bruteForceProtectionMiddleware, authMiddleware, whatsappTemplatesRoutes);
+  app.use("/template-aliases", bruteForceProtectionMiddleware, authMiddleware, templateAliasesRoutes);
+  app.use("/quota", bruteForceProtectionMiddleware, authMiddleware, quotaRoutes);
+  app.use("/webhooks", bruteForceProtectionMiddleware, authMiddleware, webhookConfigRoutes);
+  app.use("/entities", bruteForceProtectionMiddleware, authMiddleware, entitiesRoutes);
 }
 
 function registerHttpHandlers(app) {

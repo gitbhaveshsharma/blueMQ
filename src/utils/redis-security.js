@@ -5,7 +5,7 @@
  * Optimized for performance and multi-process environments (PM2).
  */
 
-const { getRedis } = require('../queues/connection');
+const { getRedisConnection: getRedis } = require('../queues/connection');
 
 // ─── Redis Key Namespaces ──────────────────────────────────────────────────
 
