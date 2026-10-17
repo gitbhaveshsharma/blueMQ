@@ -20,6 +20,15 @@ const { authMiddleware } = require("./api/middlewares/auth");
 const { getProcessModeConfig } = require("./runtime/process-mode");
 const { getDb, warmPool } = require("./db");
 
+// ─── Security Middleware (Phase 1 & 2) ───
+const { requestValidationMiddleware } = require("./api/middlewares/request-validation");
+const { securityHeadersMiddleware, customSecurityHeaders } = require("./api/middlewares/security-headers");
+const { globalRateLimiter, endpointRateLimiter } = require("./api/middlewares/rate-limiting");
+const { ipAccessControlMiddleware } = require("./api/middlewares/ip-access-control");
+const { bruteForceProtectionMiddleware } = require("./api/middlewares/brute-force-protection");
+const { hardenedCorsMiddleware } = require("./api/middlewares/cors-hardened");
+const securityConfig = require("./config/security.config");
+
 // ─── Routes ───
 const healthRoutes = require("./api/routes/health");
 const appsRoutes = require("./api/routes/apps");
@@ -41,10 +50,31 @@ const { attachWebSocketServer } = require("./ws");
 function createExpressApp() {
   const app = express();
 
+  // ─── Security Layer (Phase 1 & 2) ───
+  // Order matters: fastest rejection first
+  
   app.use(requestContextMiddleware);
-  app.use(helmet());
-  app.use(cors());
+  
+  // PHASE 2: IP access control (first line of defense)
+  app.use(ipAccessControlMiddleware);
+  
+  // PHASE 1: Request validation (blocks malicious patterns)
+  app.use(requestValidationMiddleware);
+  
+  // PHASE 1: Security headers (helmet + custom)
+  app.use(securityHeadersMiddleware());
+  app.use(customSecurityHeaders);
+  
+  // PHASE 2: CORS (hardened or permissive based on config)
+  app.use(hardenedCorsMiddleware());
+  
+  // PHASE 1: Global rate limiting (per IP)
+  app.use(globalRateLimiter());
+  
+  // Body parsing
   app.use(express.json({ limit: "1mb" }));
+  
+  // Request logging
   app.use(requestLoggingMiddleware);
 
   return app;
@@ -54,21 +84,42 @@ function registerRoutes(app) {
   // ─── Public routes (no auth) ───
   app.use("/health", healthRoutes);
   app.use("/apps", appsRoutes);
-  app.use("/auth", authRoutes);
+  
+  // PHASE 2: Auth routes with brute force protection + rate limiting
+  app.use(
+    "/auth",
+    bruteForceProtectionMiddleware,
+    endpointRateLimiter('auth', securityConfig.rateLimiting.auth),
+    authRoutes
+  );
 
   // ─── Protected routes (require x-api-key) ───
-  app.use("/notify", authMiddleware, notifyRoutes);
-  app.use("/notifications", authMiddleware, notificationsRoutes);
-  app.use("/templates", authMiddleware, templatesRoutes);
-  app.use("/whatsapp", authMiddleware, whatsappSessionsRoutes);
+  
+  // Notify endpoint with endpoint-specific rate limiting
+  app.use(
+    "/notify",
+    authMiddleware,
+    endpointRateLimiter('notify', {
+      ...securityConfig.rateLimiting.notify,
+      trackBy: 'apiKey'
+    }),
+    notifyRoutes
+  );
+  
+  app.use("/notifications", bruteForceProtectionMiddleware, authMiddleware, notificationsRoutes);
+  app.use("/templates", bruteForceProtectionMiddleware, authMiddleware, templatesRoutes);
+  app.use("/whatsapp", bruteForceProtectionMiddleware, authMiddleware, whatsappSessionsRoutes);
   app.use("/settings", settingsRoutes);
-  app.use("/schedules", authMiddleware, schedulesRoutes);
-  app.use("/audiences", authMiddleware, audiencesRoutes);
-  app.use("/whatsapp-templates", authMiddleware, whatsappTemplatesRoutes);
-  app.use("/template-aliases", authMiddleware, templateAliasesRoutes);
-  app.use("/quota", authMiddleware, quotaRoutes);
-  app.use("/webhooks", authMiddleware, webhookConfigRoutes);
-  app.use("/entities", authMiddleware, entitiesRoutes);
+  
+  // Schedules with trigger endpoint rate limiting
+  app.use("/schedules", bruteForceProtectionMiddleware, authMiddleware, schedulesRoutes);
+  
+  app.use("/audiences", bruteForceProtectionMiddleware, authMiddleware, audiencesRoutes);
+  app.use("/whatsapp-templates", bruteForceProtectionMiddleware, authMiddleware, whatsappTemplatesRoutes);
+  app.use("/template-aliases", bruteForceProtectionMiddleware, authMiddleware, templateAliasesRoutes);
+  app.use("/quota", bruteForceProtectionMiddleware, authMiddleware, quotaRoutes);
+  app.use("/webhooks", bruteForceProtectionMiddleware, authMiddleware, webhookConfigRoutes);
+  app.use("/entities", bruteForceProtectionMiddleware, authMiddleware, entitiesRoutes);
 }
 
 function registerHttpHandlers(app) {
@@ -98,6 +149,17 @@ function startApiServer() {
 
   server.listen(config.port, () => {
     console.log(`[server] Listening on port ${config.port}`);
+    console.log("═══════════════════════════════════════════");
+    console.log("[security] Security middleware status:");
+    console.log(`  Phase 1 (Core):`);
+    console.log(`    - Request validation: ${securityConfig.enabled.requestValidation}`);
+    console.log(`    - Rate limiting: ${securityConfig.enabled.rateLimiting}`);
+    console.log(`    - Security headers: ${securityConfig.enabled.securityHeaders}`);
+    console.log(`  Phase 2 (Advanced):`);
+    console.log(`    - IP blacklist: ${securityConfig.enabled.ipBlacklist}`);
+    console.log(`    - Brute force protection: ${securityConfig.enabled.bruteForceProtection}`);
+    console.log(`    - Threat scoring: ${securityConfig.enabled.threatScoring}`);
+    console.log(`    - CORS hardening: ${securityConfig.enabled.corsHardening}`);
     console.log("═══════════════════════════════════════════");
   });
 }
