@@ -50,30 +50,34 @@ const { attachWebSocketServer } = require("./ws");
 function createExpressApp() {
   const app = express();
 
+  // Trust proxy headers (Nginx forwards real client IP via X-Forwarded-For, X-Real-IP)
+  // This is required for correct IP detection in security middleware
+  app.set('trust proxy', true);
+
   // ─── Security Layer (Phase 1 & 2) ───
   // Order matters: fastest rejection first
-  
+
   app.use(requestContextMiddleware);
-  
+
   // PHASE 2: IP access control (first line of defense)
   app.use(ipAccessControlMiddleware);
-  
+
   // PHASE 1: Request validation (blocks malicious patterns)
   app.use(requestValidationMiddleware);
-  
+
   // PHASE 1: Security headers (helmet + custom)
   app.use(securityHeadersMiddleware());
   app.use(customSecurityHeaders);
-  
+
   // PHASE 2: CORS (hardened or permissive based on config)
   app.use(hardenedCorsMiddleware());
-  
+
   // PHASE 1: Global rate limiting (per IP)
   app.use(globalRateLimiter());
-  
+
   // Body parsing
   app.use(express.json({ limit: "1mb" }));
-  
+
   // Request logging
   app.use(requestLoggingMiddleware);
 
@@ -84,7 +88,7 @@ function registerRoutes(app) {
   // ─── Public routes (no auth) ───
   app.use("/health", healthRoutes);
   app.use("/apps", appsRoutes);
-  
+
   // PHASE 2: Auth routes with brute force protection + rate limiting
   app.use(
     "/auth",
@@ -94,7 +98,7 @@ function registerRoutes(app) {
   );
 
   // ─── Protected routes (require x-api-key) ───
-  
+
   // Notify endpoint with endpoint-specific rate limiting
   app.use(
     "/notify",
@@ -105,15 +109,15 @@ function registerRoutes(app) {
     }),
     notifyRoutes
   );
-  
+
   app.use("/notifications", bruteForceProtectionMiddleware, authMiddleware, notificationsRoutes);
   app.use("/templates", bruteForceProtectionMiddleware, authMiddleware, templatesRoutes);
   app.use("/whatsapp", bruteForceProtectionMiddleware, authMiddleware, whatsappSessionsRoutes);
   app.use("/settings", settingsRoutes);
-  
+
   // Schedules with trigger endpoint rate limiting
   app.use("/schedules", bruteForceProtectionMiddleware, authMiddleware, schedulesRoutes);
-  
+
   app.use("/audiences", bruteForceProtectionMiddleware, authMiddleware, audiencesRoutes);
   app.use("/whatsapp-templates", bruteForceProtectionMiddleware, authMiddleware, whatsappTemplatesRoutes);
   app.use("/template-aliases", bruteForceProtectionMiddleware, authMiddleware, templateAliasesRoutes);
