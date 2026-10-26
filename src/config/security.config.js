@@ -220,6 +220,31 @@ const securityConfig = {
     threshold: parseNumber('SECURITY_THREAT_THRESHOLD', 50, { min: 1 }), // Auto-ban at this score
     autoBan: parseBoolean('SECURITY_THREAT_AUTO_BAN', false),
     decayHours: parseNumber('SECURITY_THREAT_DECAY_HOURS', 24, { min: 1 }), // Score resets after this
+
+    /**
+     * Regex patterns for paths commonly probed by scanners and bots.
+     * Any 404 matching one of these patterns will be scored as an
+     * `exploit_path` threat event (see registerHttpHandlers in index.js).
+     *
+     * Add new patterns here — no code changes elsewhere needed.
+     */
+    sensitivePaths: [
+      /\/wp-login/i,
+      /\/wp-admin/i,
+      /\/xmlrpc/i,
+      /\/admin/i,
+      /\/actuator/i,
+      /\/\.env/i,
+      /\/config\./i,
+      /\/phpmyadmin/i,
+      /\/shell/i,
+      /\/cgi-bin/i,
+      /\/\.git/i,
+      /\/auth\/signin/i,
+      /\/api\/auth\/signin/i,
+      /\/user\/login/i,
+      /\/account\/login/i,
+    ],
   },
 
   // ─── Admin API ─────────────────────────────────────────────────────────
