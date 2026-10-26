@@ -26,23 +26,33 @@ function getThreatScoring() {
 // ─── Suspicious Pattern Definitions ────────────────────────────────────────
 
 const PATTERNS = {
+  // PHASE 1 & 2 PATTERNS
   // Path traversal: ../, ..\, url-encoded variants
   pathTraversal: /\.\.[\/\\]|%2e%2e[\/\\]|\.\.%2f|\.\.%5c/i,
-  
   // SQL injection common patterns
   sqlInjection: /(union\s+select|or\s+1\s*=\s*1|'\s*or\s*'|admin'\s*--|1'\s*or\s*'1'\s*=\s*'1|\/\*|\*\/|;--|xp_|sp_executesql|exec\s*\(|execute\s*\()/i,
-  
   // Common exploit paths
   exploitPaths: /\/(vendor|\.git|\.env|\.svn|\.DS_Store|wp-admin|wp-content|phpmyadmin|\.php|\.asp|\.aspx|\.jsp|eval-stdin|phpinfo|shell|cmd)/i,
-  
   // Script injection
   scriptTags: /<script[\s\S]*?>[\s\S]*?<\/script>/gi,
-  
   // Prototype pollution keys
   prototypeKeys: /(__proto__|constructor\.prototype|prototype\.)/,
+
+  // PHASE 3 OWASP PATTERNS
+  // Command injection: shell metacharacters, command chaining
+  commandInjection: /[;&|]\s*(ls|cat|rm|wget|curl|bash|sh|cmd|powershell)|&&|\|\||`|\\x[0-9a-f]{2}/i,
+  // XSS: script tags, event handlers, javascript protocol
+  xss: /<script[\s\S]*?>|javascript:|onerror\s*=|onload\s*=|onclick\s*=|onmouseover\s*=|<iframe|<object|<embed|eval\s*\(|expression\s*\(/i,
+  // NoSQL injection: MongoDB operators
+  nosqlInjection: /\$ne[^a-z]|\$gt[^a-z]|\$lt[^a-z]|\$where|\$regex|\$or[^a-z]|\$and[^a-z]|\$nin|\$exists/i,
+  // Scanner probes: backup files, version control, sensitive files
+  scannerProbes: /(backup|\.bak|\.old|\.sql|\.tar|\.gz|\.zip|\.rar|sitemap\.xml|\.git\/|\.svn\/|\.hg\/|\.bzr\/|CVS\/|\.well-known\/security\.txt)|\.sql\.(gz|tar|zip|bak)|\.db\.(gz|tar|zip|bak)/i,
+  // Template injection: Jinja2, ERB, JSP, Thymeleaf patterns
+  templateInjection: /\{\{.*\}\}|\$\{.*\}|<%.*%>|\[@.*@\]/,
+  // Header injection: CRLF injection for header smuggling
+  headerInjection: /\r\n|\r|\n|%0d%0a|%0a%0d|%0d|%0a|%00/i,
 };
 
-// ─── Validation Functions ──────────────────────────────────────────────────
 
 /**
  * Check URL for suspicious patterns
@@ -93,6 +103,7 @@ function validateURL(url) {
   }
   
   // Check exploit paths
+  // Check exploit paths
   if (config.blockPhpPaths && PATTERNS.exploitPaths.test(decodedUrl)) {
     return {
       isSuspicious: true,
@@ -100,6 +111,63 @@ function validateURL(url) {
       pattern: 'exploit_path',
     };
   }
+  
+  // PHASE 3 CHECKS
+  // Check command injection
+  if (PATTERNS.commandInjection.test(decodedUrl)) {
+    return {
+      isSuspicious: true,
+      reason: 'Command injection attempt detected',
+      pattern: 'command_injection',
+    };
+  }
+  
+  // Check XSS patterns
+  if (PATTERNS.xss.test(decodedUrl)) {
+    return {
+      isSuspicious: true,
+      reason: 'XSS attack pattern detected',
+      pattern: 'xss',
+    };
+  }
+  
+  // Check NoSQL injection
+  if (PATTERNS.nosqlInjection.test(decodedUrl)) {
+    return {
+      isSuspicious: true,
+      reason: 'NoSQL injection pattern detected',
+      pattern: 'nosql_injection',
+    };
+  }
+  
+  // Check scanner probes
+  if (PATTERNS.scannerProbes.test(decodedUrl)) {
+    return {
+      isSuspicious: true,
+      reason: 'Security scanner probe detected',
+      pattern: 'scanner_probe',
+    };
+  }
+  
+  // Check template injection
+  if (PATTERNS.templateInjection.test(decodedUrl)) {
+    return {
+      isSuspicious: true,
+      reason: 'Template injection attempt detected',
+      pattern: 'template_injection',
+    };
+  }
+  
+  // Check header injection
+  if (PATTERNS.headerInjection.test(decodedUrl)) {
+    return {
+      isSuspicious: true,
+      reason: 'Header injection attempt detected',
+      pattern: 'header_injection',
+    };
+  }
+  
+  return { isSuspicious: false, reason: null, pattern: null };
   
   return { isSuspicious: false, reason: null, pattern: null };
 }

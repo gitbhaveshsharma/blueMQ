@@ -128,7 +128,30 @@ function registerRoutes(app) {
 
 function registerHttpHandlers(app) {
   // ─── 404 ───
-  app.use((_req, res) => {
+  app.use(async (req, res) => {
+    const { getClientIP } = require("./api/middlewares/rate-limiting");
+    const { incrementThreatScore, checkAndBanIfHighThreat } = require("./api/middlewares/threat-scoring");
+    const securityConfig = require("./config/security.config");
+
+    // Sensitive path patterns are defined centrally in security.config.js
+    const isSensitivePath = securityConfig.threatScoring.sensitivePaths.some((p) => p.test(req.path));
+
+    if (isSensitivePath && securityConfig.enabled.threatScoring) {
+      const clientIP = getClientIP(req);
+      try {
+        await incrementThreatScore(clientIP, "sensitive_path_probe", securityConfig.threatScoring.points.exploitPath);
+        await checkAndBanIfHighThreat(clientIP);
+      } catch (err) {
+        // Non-fatal
+      }
+      console.warn("[security] Sensitive path probed (404):", {
+        method: req.method,
+        path: req.path,
+        ip: getClientIP(req),
+        userAgent: req.get("user-agent"),
+      });
+    }
+
     res.status(404).json({ error: "Not found" });
   });
 
@@ -138,6 +161,7 @@ function registerHttpHandlers(app) {
     res.status(500).json({ error: "Internal server error" });
   });
 }
+
 
 function startApiServer() {
   const app = createExpressApp();

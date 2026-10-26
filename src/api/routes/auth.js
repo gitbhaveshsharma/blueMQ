@@ -2,6 +2,9 @@ const { Router } = require("express");
 const crypto = require("crypto");
 const { getDb } = require("../../db");
 const config = require("../../config");
+const { incrementThreatScore, checkAndBanIfHighThreat } = require("../middlewares/threat-scoring");
+const { getClientIP } = require("../middlewares/rate-limiting");
+const securityConfig = require("../../config/security.config");
 
 const router = Router();
 
@@ -315,6 +318,41 @@ router.post("/login/verify-otp", async (req, res) => {
     console.error("[auth] login/verify-otp error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
+});
+
+// ────────────────────────────────────────────────────────
+// Catch-all: unknown /auth/* paths (bot/scanner probing)
+// Routes like POST /auth/signin, /auth/login, /auth/wp-login, etc.
+// These pass through the brute force + rate limit middleware chain
+// above but would otherwise silently 404 via the global handler,
+// bypassing threat scoring. We catch them here and score them.
+// ────────────────────────────────────────────────────────
+router.all("*", async (req, res) => {
+  const clientIP = getClientIP(req);
+
+  // Score this as an exploit-path probe if threat scoring is enabled
+  if (securityConfig.enabled.threatScoring) {
+    try {
+      await incrementThreatScore(
+        clientIP,
+        "auth_path_probe",
+        securityConfig.threatScoring.points.exploitPath ?? 5
+      );
+      await checkAndBanIfHighThreat(clientIP);
+    } catch (err) {
+      // Non-fatal — don't block the response
+      console.error("[security] Threat score error on auth probe:", err.message);
+    }
+  }
+
+  console.warn("[security] Unknown auth path probed:", {
+    method: req.method,
+    path: req.path,
+    ip: clientIP,
+    userAgent: req.get("user-agent"),
+  });
+
+  return res.status(404).json({ error: "Not found" });
 });
 
 module.exports = router;
