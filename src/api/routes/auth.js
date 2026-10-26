@@ -327,7 +327,7 @@ router.post("/login/verify-otp", async (req, res) => {
 // above but would otherwise silently 404 via the global handler,
 // bypassing threat scoring. We catch them here and score them.
 // ────────────────────────────────────────────────────────
-router.all("*", async (req, res) => {
+router.use(async (req, res) => {
   const clientIP = getClientIP(req);
 
   // Score this as an exploit-path probe if threat scoring is enabled
