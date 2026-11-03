@@ -16,7 +16,7 @@
  * re-enqueueing into BullMQ.
  */
 
-const { getDb } = require("../db");
+const { getDb, ErrorType, classifyError } = require("../db");
 const { signWebhookPayload } = require("../utils/webhook-signer");
 
 // Backoff schedule (seconds after previous attempt)
@@ -203,7 +203,24 @@ async function tick() {
       }
     }
   } catch (err) {
-    console.error("[webhook-delivery] Poll error:", err.message);
+    // PoolClosedError = process is shutting down — stop the worker silently
+    if (err.type === ErrorType.POOL_CLOSED || err.name === "PoolClosedError") {
+      stop();
+      return;
+    }
+    // Connection/timeout errors are transient (Neon pool recreation, idle drop).
+    // Log at warn — these self-heal on the next tick.
+    const errType = err.type ?? (typeof classifyError === "function" ? classifyError(err) : null);
+    if (
+      errType === ErrorType.CONNECTION ||
+      errType === ErrorType.TIMEOUT ||
+      err.message?.toLowerCase().includes("connection terminated") ||
+      err.message?.toLowerCase().includes("terminating connection")
+    ) {
+      console.warn("[webhook-delivery] Transient connection error (will retry next tick):", err.message);
+    } else {
+      console.error("[webhook-delivery] Poll error:", err.message);
+    }
   } finally {
     _running = false;
   }
@@ -216,9 +233,10 @@ function start() {
   console.log(
     `[webhook-delivery] Worker started (poll=${POLL_INTERVAL_MS / 1000}s, maxAttempts=${MAX_ATTEMPTS})`
   );
-  tick().catch((err) =>
-    console.error("[webhook-delivery] Initial tick error:", err.message)
-  );
+  tick().catch((err) => {
+    if (err.type === ErrorType.POOL_CLOSED || err.name === "PoolClosedError") return;
+    console.error("[webhook-delivery] Initial tick error:", err.message);
+  });
   _timer = setInterval(tick, POLL_INTERVAL_MS);
   if (_timer.unref) _timer.unref();
 }

@@ -3,6 +3,11 @@ const { randomUUID } = require("crypto");
 const util = require("util");
 const winston = require("winston");
 
+// OTel API: provides trace context when telemetry is enabled.
+// When telemetry is disabled or no span is active, getActiveSpan() returns
+// undefined and isSpanContextValid() returns false — both handled gracefully.
+const { trace, isSpanContextValid } = require("@opentelemetry/api");
+
 const requestContextStorage = new AsyncLocalStorage();
 
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
@@ -27,6 +32,25 @@ function getTimezoneTimestamp() {
   return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}:${pick("second")}.${pick("fractionalSecond")}`;
 }
 
+/**
+ * Inject OTel trace_id and span_id from the currently active span (if any).
+ * When telemetry is disabled or no span is active, this is a no-op.
+ * WinstonInstrumentation also injects these fields; this format is a fallback
+ * ensuring trace context appears even if instrumentation hasn't patched yet.
+ */
+const injectTraceContext = winston.format((info) => {
+  const span = trace.getActiveSpan();
+  if (span) {
+    const ctx = span.spanContext();
+    if (isSpanContextValid(ctx)) {
+      info.trace_id = ctx.traceId;
+      info.span_id = ctx.spanId;
+      info.trace_flags = `0${ctx.traceFlags.toString(16)}`;
+    }
+  }
+  return info;
+});
+
 const injectRequestContext = winston.format((info) => {
   const context = requestContextStorage.getStore();
   if (!context) return info;
@@ -49,7 +73,36 @@ const normalizeMessage = winston.format((info) => {
   return info;
 });
 
+/**
+ * Redact sensitive field values from structured log data.
+ *
+ * Only walks object keys — does NOT scan free-text message strings (too
+ * expensive and error-prone). Covers secrets, tokens, API keys, and PII
+ * fields (email, phone, recipient) that must not appear in log pipelines.
+ *
+ * Depth-limited to 4 levels to avoid performance impact on large payloads.
+ */
+const SENSITIVE_KEYS_RE =
+  /^(password|passwd|token|access_token|refresh_token|id_token|secret|client_secret|api_key|apikey|access_key|x-api-key|x_api_key|authorization|auth_token|private_key|privatekey|otp|pin|cvv|card_number|email|phone|mobile|recipient|to_address|recipient_email|recipient_phone)$/i;
+
+function redactObject(obj, depth) {
+  if (depth > 4 || obj === null || typeof obj !== "object") return;
+  for (const key of Object.keys(obj)) {
+    if (SENSITIVE_KEYS_RE.test(key)) {
+      obj[key] = "[REDACTED]";
+    } else {
+      redactObject(obj[key], depth + 1);
+    }
+  }
+}
+
+const redactSensitive = winston.format((info) => {
+  redactObject(info, 0);
+  return info;
+});
+
 function formatMeta(info) {
+  // Fields rendered separately in the console line or OTel / JSON output
   const skip = new Set([
     "level",
     "message",
@@ -60,6 +113,10 @@ function formatMeta(info) {
     "method",
     "stack",
     "appId",
+    // OTel trace context — shown in contextBits or JSON; skip from inline meta
+    "trace_id",
+    "span_id",
+    "trace_flags",
   ]);
 
   const meta = {};
@@ -88,6 +145,8 @@ const consoleLineFormatter = winston.format.printf((info) => {
   else if (info.endpoint) contextBits.push(info.endpoint);
   if (info.requestId) contextBits.push(`req:${info.requestId}`);
   if (info.appId) contextBits.push(`app:${info.appId}`);
+  // Show abbreviated trace_id in dev for quick copy-paste into Tempo / LGTM
+  if (info.trace_id) contextBits.push(`trace:${info.trace_id.slice(0, 8)}`);
 
   const context = contextBits.length ? ` [${contextBits.join(" | ")}]` : "";
   const stack = info.stack ? `\n${info.stack}` : "";
@@ -95,24 +154,45 @@ const consoleLineFormatter = winston.format.printf((info) => {
   return `${info.timestamp} ${LOG_TIMEZONE} [${info.level}] [${info.service}]${context} ${info.message}${formatMeta(info)}${stack}`;
 });
 
+/**
+ * Build the console transport.
+ *
+ * Production  (NODE_ENV=production): JSON format.
+ *   - Includes all fields including trace_id / span_id for log pipeline ingestion
+ *   - PM2 captures stdout → log files and (when configured) OTLP log exporter
+ *
+ * Development / test: human-readable colorised lines with abbreviated trace_id.
+ */
+function buildConsoleTransport() {
+  if (process.env.NODE_ENV === "production") {
+    return new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json(),
+      ),
+    });
+  }
+  return new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize({ level: true }),
+      winston.format.timestamp({ format: getTimezoneTimestamp }),
+      consoleLineFormatter,
+    ),
+  });
+}
+
 const logger = winston.createLogger({
   level: LOG_LEVEL,
   defaultMeta: { service: LOG_SERVICE_NAME },
   format: winston.format.combine(
     winston.format.errors({ stack: true }),
     winston.format.splat(),
-    injectRequestContext(),
+    injectTraceContext(),    // OTel trace_id / span_id from active span
+    injectRequestContext(),  // requestId / endpoint / appId from AsyncLocalStorage
     normalizeMessage(),
+    redactSensitive(),       // scrub tokens, keys, emails, phones
   ),
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize({ level: true }),
-        winston.format.timestamp({ format: getTimezoneTimestamp }),
-        consoleLineFormatter,
-      ),
-    }),
-  ],
+  transports: [buildConsoleTransport()],
 });
 
 logger.exitOnError = false;

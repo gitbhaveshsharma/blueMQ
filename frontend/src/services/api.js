@@ -47,9 +47,24 @@ class ApiClient {
   }
 
   // ── Health ──
+
+  /**
+   * Liveness check — no deps, no auth. Used by the dashboard status indicator.
+   * Points at GET /health which is cheap and never wakes Neon.
+   */
   health() {
     return this.#request("GET", "/health", { auth: "none" });
   }
+
+  /**
+   * Operational detail — provider list + BullMQ queue stats.
+   * Requires API key. Points at GET /health/detail (auth-gated).
+   * Use this instead of health() for the dashboard's detailed stats view.
+   */
+  healthDetail() {
+    return this.#request("GET", "/health/detail");
+  }
+
 
   // ── App profile ──
   getAppProfile() {

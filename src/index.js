@@ -1,4 +1,8 @@
+// ── OTel MUST be the first require — patches libraries at load time ──────────
+require("./telemetry");
+
 require("dotenv").config({ quiet: true });
+
 
 const express = require("express");
 const cors = require("cors");
@@ -18,7 +22,8 @@ const { startWorkers } = require("./workers");
 const { bootstrapProviders } = require("./providers/bootstrap");
 const { authMiddleware } = require("./api/middlewares/auth");
 const { getProcessModeConfig } = require("./runtime/process-mode");
-const { getDb, warmPool } = require("./db");
+const { getDb, warmPool, closePool } = require("./db");
+
 
 // ─── Security Middleware (Phase 1 & 2) ───
 const { requestValidationMiddleware } = require("./api/middlewares/request-validation");
@@ -30,7 +35,8 @@ const { hardenedCorsMiddleware } = require("./api/middlewares/cors-hardened");
 const securityConfig = require("./config/security.config");
 
 // ─── Routes ───
-const healthRoutes = require("./api/routes/health");
+const { healthRouter, readyRouter } = require("./api/routes/health");
+
 const appsRoutes = require("./api/routes/apps");
 const notifyRoutes = require("./api/routes/notify");
 const notificationsRoutes = require("./api/routes/notifications");
@@ -47,17 +53,32 @@ const webhookConfigRoutes = require("./api/routes/webhook-config");
 const entitiesRoutes = require("./api/routes/entities");
 const { attachWebSocketServer } = require("./ws");
 
+// ─── Observability ───
+const { metricsMiddleware } = require("./api/middlewares/metrics");
+const { shutdownTelemetry } = require("./telemetry");
+
+
 function createExpressApp() {
   const app = express();
 
   // Trust proxy headers (Nginx forwards real client IP via X-Forwarded-For, X-Real-IP)
   // This is required for correct IP detection in security middleware
-  app.set('trust proxy', true);
+  app.set("trust proxy", true);
 
-  // ─── Security Layer (Phase 1 & 2) ───
-  // Order matters: fastest rejection first
-
+  // ─── Request context (must be first — establishes requestId for all paths) ───
   app.use(requestContextMiddleware);
+
+  // ─── Ops endpoints bypass ALL security middleware ──────────────────────────
+  // Mounted here, before the security stack, so:
+  //   • Banned IPs can still reach /health (liveness never blocked)
+  //   • Health/ready are never rate-limited
+  //   • Neither path is traced (excluded in HttpInstrumentation config)
+  //   • Neither path appears in requestLoggingMiddleware output
+  app.use("/health", healthRouter);
+  app.use("/ready", readyRouter);
+
+  // ─── Security Layer (Phase 1 & 2) ──────────────────────────────────────────
+  // Order matters: fastest rejection first
 
   // PHASE 2: IP access control (first line of defense)
   app.use(ipAccessControlMiddleware);
@@ -81,13 +102,19 @@ function createExpressApp() {
   // Request logging
   app.use(requestLoggingMiddleware);
 
+  // HTTP request count + error count metrics (no duration — built-in instrumentation
+  // already emits http.server.duration via instrumentation-http + instrumentation-express)
+  app.use(metricsMiddleware);
+
   return app;
 }
 
+
 function registerRoutes(app) {
   // ─── Public routes (no auth) ───
-  app.use("/health", healthRoutes);
+  // NOTE: /health and /ready are mounted in createExpressApp() before security middleware.
   app.use("/apps", appsRoutes);
+
 
   // PHASE 2: Auth routes with brute force protection + rate limiting
   app.use(
@@ -211,12 +238,22 @@ async function bootstrapByMode(runtime) {
 async function closeRedisAndExit(signal) {
   console.log(`[server] ${signal} received, shutting down...`);
   try {
+    // 1. Flush OTel telemetry first (spans, metrics, logs) — 5 s hard cap.
+    //    Must run before Redis/PG close so in-flight exporters still have connections.
+    //    kill_timeout in ecosystem.config.js is 12 s, giving us comfortable headroom.
+    await shutdownTelemetry(5000);
+
+    // 2. Drain the PG connection pool gracefully.
+    await closePool();
+
+    // 3. Quit all ioredis connections (BullMQ, publisher, subscriber).
     const { closeRedis } = require("./queues/connection");
     await closeRedis();
   } finally {
     process.exit(0);
   }
 }
+
 
 function registerShutdownHandlers() {
   process.on("SIGTERM", () => closeRedisAndExit("SIGTERM"));
@@ -230,6 +267,24 @@ function registerProcessErrorHandlers() {
 
   process.on("uncaughtException", (err) => {
     console.error("[server] Uncaught exception:", err);
+
+    // Special handling for network errors that should trigger connection recovery
+    // rather than immediate process crash
+    const isNetworkError =
+      err.code === "ENETDOWN" ||
+      err.code === "ECONNRESET" ||
+      err.code === "ETIMEDOUT" ||
+      err.code === "ENETUNREACH" ||
+      (err.message && err.message.toLowerCase().includes("connection"));
+
+    if (isNetworkError) {
+      console.error("[server] Network error detected, triggering pool recreation...");
+      // Don't exit immediately - let the pool recreation mechanism handle it
+      // The db module will detect and recreate the pool on next query
+      return;
+    }
+
+    // For all other uncaught exceptions, exit immediately
     process.exit(1);
   });
 }
