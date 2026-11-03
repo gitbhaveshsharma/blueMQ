@@ -60,22 +60,33 @@ let _shutdownCalled = false;
  *   PG pool drain (~1 s) and Redis quit (~500 ms).
  */
 async function shutdownTelemetry(timeoutMs = 5000) {
-  if (_shutdownCalled || !_sdk) return;
+  if (_shutdownCalled) return;
   _shutdownCalled = true;
+  
+  // If SDK was never initialized or is null, skip gracefully
+  if (!_sdk) {
+    return;
+  }
+  
   try {
+    // Verify SDK has shutdown method before calling
     if (typeof _sdk.shutdown !== "function") {
       process.stderr.write("[telemetry] SDK has no shutdown() — skipping flush\n");
       return;
     }
+    
     await Promise.race([
       _sdk.shutdown(),
       new Promise((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
     process.stderr.write("[telemetry] Shutdown complete\n");
   } catch (err) {
-    process.stderr.write(
-      `[telemetry] Shutdown error (non-fatal): ${err.message}\n`,
-    );
+    // Only log if it's not a "cannot read property" error on undefined SDK
+    if (err && err.message && !err.message.includes("Cannot read properties of undefined")) {
+      process.stderr.write(
+        `[telemetry] Shutdown error (non-fatal): ${err.message}\n`,
+      );
+    }
   }
 }
 

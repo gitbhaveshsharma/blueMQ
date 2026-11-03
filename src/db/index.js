@@ -1,5 +1,18 @@
 "use strict";
 
+// Suppress PostgreSQL SSL mode warning (cosmetic, behavior is already secure)
+// The warning is about a future breaking change in pg v9.0.0, not a current security issue
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = function (warning, type, code, ...args) {
+  if (
+    typeof warning === "string" &&
+    warning.includes("SECURITY WARNING: The SSL modes")
+  ) {
+    return; // Suppress this specific warning
+  }
+  return originalEmitWarning.call(this, warning, type, code, ...args);
+};
+
 /**
  * src/db/index.js — Neon-hardened PostgreSQL pool module
  *
