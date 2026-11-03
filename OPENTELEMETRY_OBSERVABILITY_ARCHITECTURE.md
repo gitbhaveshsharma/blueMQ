@@ -235,3 +235,41 @@ npx jest tests/health.routes.test.js tests/otel.config.test.js tests/otel.logger
   - Validates Winston log formatting and injection of `trace_id`, `span_id`, and `trace_flags`
 - `tests/metrics.middleware.test.js` (11 tests):
   - Validates request counters, error tracking (5xx), and dynamic route extraction
+
+---
+
+## 9. Production Setup
+
+### Quick Start
+
+See dedicated guides:
+- **[Grafana Cloud Setup](./GRAFANA_CLOUD_SETUP.md)** - Complete Grafana Cloud integration
+- **[Production Quick Reference](./PRODUCTION_QUICK_REFERENCE.md)** - Essential commands and configuration
+
+### Production Checklist
+
+```bash
+# 1. Validate configuration
+./scripts/production-setup.sh
+
+# 2. Set required environment variables
+SERVICE_API_KEY_SECRET=$(openssl rand -hex 32)
+# Configure Grafana Cloud credentials (see GRAFANA_CLOUD_SETUP.md)
+
+# 3. Deploy
+pm2 start ecosystem.config.js
+
+# 4. Verify
+curl http://localhost:3001/health
+curl http://localhost:3001/ready
+```
+
+### Environment Variables
+
+All configuration is via environment variables (no hardcoding):
+- `TELEMETRY_ENABLED` - Master switch
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - Grafana Cloud endpoint
+- `OTEL_EXPORTER_OTLP_HEADERS` - Base64 auth header
+- `SERVICE_API_KEY_SECRET` - Admin API protection
+
+See `.env.example` for complete reference.
