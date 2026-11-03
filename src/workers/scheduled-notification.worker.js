@@ -1,6 +1,6 @@
 const { Queue, Worker } = require("bullmq");
 const { getRedisConnection } = require("../queues/connection");
-const { getDb } = require("../db");
+const { getDb, ErrorType, classifyError } = require("../db");
 const { getPollIntervalCron } = require("../utils/config-resolver.util");
 const { computeNextRun } = require("../utils/compute-next-run.util");
 const { renderTemplate } = require("../utils/template");
@@ -837,11 +837,37 @@ async function startScheduledNotificationWorker() {
   });
 
   worker.on("failed", (_job, err) => {
-    console.error("[schedule-worker] Poll job failed:", err.message);
+    if (!err) return;
+    // Swallow PoolClosedError — process is shutting down
+    if (err.type === ErrorType.POOL_CLOSED || err.name === "PoolClosedError") return;
+    // Connection/timeout drops are transient (Neon pool recreation, idle drop).
+    // BullMQ will retry the job automatically. Log at warn, not error.
+    const errType = err.type ?? classifyError(err);
+    if (
+      errType === ErrorType.CONNECTION ||
+      errType === ErrorType.TIMEOUT ||
+      err.message?.toLowerCase().includes("connection terminated") ||
+      err.message?.toLowerCase().includes("terminating connection")
+    ) {
+      console.warn("[schedule-worker] Transient connection error (will retry next tick):", err.message);
+    } else {
+      console.error("[schedule-worker] Poll job failed:", err.message);
+    }
   });
 
   worker.on("error", (err) => {
-    console.error("[schedule-worker] Worker error:", err.message);
+    // Swallow connection-level errors — they are surfaced through pool.on('error')
+    // and schedule recreation already. Double-logging as worker error is noise.
+    const errType = classifyError(err);
+    if (
+      errType === ErrorType.CONNECTION ||
+      errType === ErrorType.TIMEOUT ||
+      err.message?.toLowerCase().includes("connection terminated")
+    ) {
+      console.warn("[schedule-worker] Transient worker connection error:", err.message);
+    } else {
+      console.error("[schedule-worker] Worker error:", err.message);
+    }
   });
 
   // ─── FIX 3: Refresh poll interval every 10 minutes ───
@@ -857,6 +883,11 @@ async function startScheduledNotificationWorker() {
         currentCron = newCron;
       }
     } catch (err) {
+      // Swallow PoolClosedError during shutdown
+      if (err && (err.type === ErrorType.POOL_CLOSED || err.name === "PoolClosedError")) {
+        clearInterval(refreshInterval);
+        return;
+      }
       console.error(
         "[schedule-worker] Failed to refresh poll interval:",
         err.message,

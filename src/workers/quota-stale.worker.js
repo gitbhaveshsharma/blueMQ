@@ -16,7 +16,7 @@
  * The worker uses FOR UPDATE SKIP LOCKED to be safe for concurrent deployments.
  */
 
-const { getDb } = require("../db");
+const { getDb, ErrorType, classifyError } = require("../db");
 const { releaseStaleReservations } = require("../utils/quota");
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -34,7 +34,24 @@ async function tick() {
       console.log(`[quota-stale] Released ${released} stale reservation(s)`);
     }
   } catch (err) {
-    console.error("[quota-stale] Error during stale reservation cleanup:", err.message);
+    // PoolClosedError = process is shutting down, not a real error
+    if (err.type === ErrorType.POOL_CLOSED || err.name === "PoolClosedError") {
+      stop();
+      return;
+    }
+    // Connection/timeout drops are transient (Neon pool recreation, idle drop)
+    // Log at warn — the next 5-min tick will succeed once the pool recovers.
+    const errType = err.type ?? classifyError(err);
+    if (
+      errType === ErrorType.CONNECTION ||
+      errType === ErrorType.TIMEOUT ||
+      err.message?.toLowerCase().includes("connection terminated") ||
+      err.message?.toLowerCase().includes("terminating connection")
+    ) {
+      console.warn("[quota-stale] Transient connection error (will retry next run):", err.message);
+    } else {
+      console.error("[quota-stale] Error during stale reservation cleanup:", err.message);
+    }
   } finally {
     _running = false;
   }
@@ -44,7 +61,10 @@ function start() {
   if (_timer) return; // already started
   console.log("[quota-stale] Stale reservation cleanup worker started (interval=5m)");
   // Run once immediately on start, then on interval
-  tick().catch((err) => console.error("[quota-stale] Initial tick error:", err.message));
+  tick().catch((err) => {
+    if (err.type === ErrorType.POOL_CLOSED || err.name === "PoolClosedError") return;
+    console.error("[quota-stale] Initial tick error:", err.message);
+  });
   _timer = setInterval(tick, POLL_INTERVAL_MS);
   // Allow the process to exit even if the timer is still active
   if (_timer.unref) _timer.unref();
