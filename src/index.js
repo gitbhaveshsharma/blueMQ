@@ -266,6 +266,13 @@ function registerProcessErrorHandlers() {
   });
 
   process.on("uncaughtException", (err) => {
+    // Ignore EPIPE errors from PM2 log streaming (cosmetic PM2 bug, not app crash)
+    // Happens when PM2 tries to write logs to a closed socket (e.g., Ctrl+C on pm2 logs)
+    if (err.code === "EPIPE" && err.syscall === "write") {
+      console.warn("[server] Ignored PM2 log streaming EPIPE (harmless)");
+      return;
+    }
+
     console.error("[server] Uncaught exception:", err);
 
     // Special handling for network errors that should trigger connection recovery
