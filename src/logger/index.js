@@ -155,16 +155,108 @@ const consoleLineFormatter = winston.format.printf((info) => {
 });
 
 /**
+ * Colorful, structured formatter for security and general logs.
+ * Works in both dev and production — makes logs human-readable.
+ */
+const colorfulFormatter = winston.format.printf((info) => {
+  // ANSI color codes
+  const colors = {
+    reset: '\x1b[0m',
+    bright: '\x1b[1m',
+    dim: '\x1b[2m',
+    
+    // Log levels
+    error: '\x1b[31m',    // red
+    warn: '\x1b[33m',     // yellow
+    info: '\x1b[36m',     // cyan
+    debug: '\x1b[35m',    // magenta
+    
+    // Components
+    timestamp: '\x1b[90m', // gray
+    service: '\x1b[96m',   // bright cyan
+    security: '\x1b[91m',  // bright red
+    http: '\x1b[92m',      // bright green
+    db: '\x1b[94m',        // bright blue
+    ip: '\x1b[93m',        // bright yellow
+    endpoint: '\x1b[95m',  // bright magenta
+  };
+
+  // Level color
+  const levelColor = colors[info.level] || colors.info;
+  const levelStr = `${levelColor}${info.level.toUpperCase().padEnd(5)}${colors.reset}`;
+  
+  // Timestamp
+  const timeStr = `${colors.timestamp}${info.timestamp}${colors.reset}`;
+  
+  // Service tag
+  const serviceStr = `${colors.service}[${info.service}]${colors.reset}`;
+  
+  // Context (endpoint, method, requestId, etc.)
+  const contextBits = [];
+  if (info.method && info.endpoint) {
+    contextBits.push(`${colors.endpoint}${info.method} ${info.endpoint}${colors.reset}`);
+  } else if (info.endpoint) {
+    contextBits.push(`${colors.endpoint}${info.endpoint}${colors.reset}`);
+  }
+  if (info.ip) contextBits.push(`${colors.ip}${info.ip}${colors.reset}`);
+  if (info.requestId) contextBits.push(`${colors.dim}req:${info.requestId.slice(0, 8)}${colors.reset}`);
+  if (info.trace_id) contextBits.push(`${colors.dim}trace:${info.trace_id.slice(0, 8)}${colors.reset}`);
+  
+  const context = contextBits.length ? ` ${contextBits.join(' ')}` : '';
+  
+  // Main message - detect category from message prefix
+  let message = info.message;
+  let messageColor = colors.reset;
+  
+  if (message.includes('[security]')) {
+    messageColor = colors.security;
+  } else if (message.includes('[http]')) {
+    messageColor = colors.http;
+  } else if (message.includes('[db]')) {
+    messageColor = colors.db;
+  }
+  
+  // Format security-specific fields in a structured way
+  let details = '';
+  if (message.includes('[security]')) {
+    const detailLines = [];
+    
+    if (info.statusCode) {
+      const statusColor = info.statusCode >= 500 ? colors.error : 
+                         info.statusCode >= 400 ? colors.warn : colors.info;
+      detailLines.push(`  ${colors.dim}Status:${colors.reset} ${statusColor}${info.statusCode}${colors.reset}`);
+    }
+    
+    if (info.userAgent) {
+      detailLines.push(`  ${colors.dim}User-Agent:${colors.reset} ${info.userAgent.slice(0, 60)}${info.userAgent.length > 60 ? '...' : ''}`);
+    }
+    
+    if (info.durationMs) {
+      detailLines.push(`  ${colors.dim}Duration:${colors.reset} ${info.durationMs}ms`);
+    }
+    
+    if (detailLines.length > 0) {
+      details = '\n' + detailLines.join('\n');
+    }
+  }
+  
+  // Stack trace if error
+  const stack = info.stack ? `\n${colors.dim}${info.stack}${colors.reset}` : '';
+  
+  return `${timeStr} ${levelStr} ${serviceStr}${context}\n  ${messageColor}${message}${colors.reset}${details}${stack}`;
+});
+
+/**
  * Build the console transport.
  *
- * Production  (NODE_ENV=production): JSON format.
- *   - Includes all fields including trace_id / span_id for log pipeline ingestion
- *   - PM2 captures stdout → log files and (when configured) OTLP log exporter
- *
- * Development / test: human-readable colorised lines with abbreviated trace_id.
+ * When LOG_FORMAT=colorful (default in production now), use colorful formatter.
+ * When LOG_FORMAT=json, use JSON (for log aggregation systems).
+ * Development: always colorful.
  */
 function buildConsoleTransport() {
-  if (process.env.NODE_ENV === "production") {
+  const logFormat = process.env.LOG_FORMAT || 'colorful';
+  
+  if (logFormat === 'json') {
     return new winston.transports.Console({
       format: winston.format.combine(
         winston.format.timestamp(),
@@ -172,11 +264,12 @@ function buildConsoleTransport() {
       ),
     });
   }
+  
+  // Colorful format (default for both dev and production)
   return new winston.transports.Console({
     format: winston.format.combine(
-      winston.format.colorize({ level: true }),
       winston.format.timestamp({ format: getTimezoneTimestamp }),
-      consoleLineFormatter,
+      colorfulFormatter,
     ),
   });
 }
