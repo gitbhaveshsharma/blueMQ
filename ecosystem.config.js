@@ -52,9 +52,8 @@ const apiApp = {
     PORT: 3001,
     NODE_OPTIONS: "--dns-result-order=ipv4first",
     PROCESS_MODE: "api",
-    // OTel — override in .env to enable. TELEMETRY_ENABLED=false keeps overhead zero.
+    // OTel — service name set here, TELEMETRY_ENABLED read from .env
     OTEL_SERVICE_NAME: "blueMQ-api",
-    TELEMETRY_ENABLED: "false",
     DEPLOYMENT_ENV: "production",
   },
   env_development: {
@@ -62,7 +61,6 @@ const apiApp = {
     PORT: 3001,
     PROCESS_MODE: "api",
     OTEL_SERVICE_NAME: "blueMQ-api",
-    TELEMETRY_ENABLED: "false",
     DEPLOYMENT_ENV: "development",
   },
 };
@@ -74,9 +72,8 @@ const workerApps = workerChannels.map((channel) => ({
     NODE_OPTIONS: "--dns-result-order=ipv4first",
     PROCESS_MODE: "worker",
     WORKER_CHANNELS: channel,
-    // OTel — distinct service name per worker channel (e.g. blueMQ-worker-email)
+    // OTel — distinct service name per worker channel, TELEMETRY_ENABLED read from .env
     OTEL_SERVICE_NAME: `blueMQ-worker-${channel}`,
-    TELEMETRY_ENABLED: "false",
     DEPLOYMENT_ENV: "production",
   },
   env_development: {
@@ -84,7 +81,6 @@ const workerApps = workerChannels.map((channel) => ({
     PROCESS_MODE: "worker",
     WORKER_CHANNELS: channel,
     OTEL_SERVICE_NAME: `blueMQ-worker-${channel}`,
-    TELEMETRY_ENABLED: "false",
     DEPLOYMENT_ENV: "development",
   },
 }));
