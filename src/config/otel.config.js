@@ -146,6 +146,10 @@ module.exports = {
       process.env.OTEL_METRIC_EXPORT_INTERVAL_MS,
       60_000,
     ),
-    exportTimeoutMillis: 15_000,
+    /** Timeout must be <= export interval */
+    exportTimeoutMillis: parseInt10(
+      process.env.OTEL_METRIC_EXPORT_TIMEOUT_MS,
+      10_000,
+    ),
   },
 };

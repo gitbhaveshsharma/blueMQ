@@ -274,6 +274,34 @@ function buildConsoleTransport() {
   });
 }
 
+/**
+ * Build OpenTelemetry Winston transport for log shipping.
+ * Only added when telemetry is enabled.
+ */
+function buildOTelTransport() {
+  if (process.env.TELEMETRY_ENABLED !== 'true') {
+    return null;
+  }
+
+  try {
+    const { OpenTelemetryTransportV3 } = require('@opentelemetry/winston-transport');
+    return new OpenTelemetryTransportV3();
+  } catch (err) {
+    // Package not installed or import failed - graceful degradation
+    process.stderr.write(
+      `[logger] OpenTelemetry transport unavailable: ${err.message}\n`
+    );
+    return null;
+  }
+}
+
+// Build transports array
+const transports = [buildConsoleTransport()];
+const otelTransport = buildOTelTransport();
+if (otelTransport) {
+  transports.push(otelTransport);
+}
+
 const logger = winston.createLogger({
   level: LOG_LEVEL,
   defaultMeta: { service: LOG_SERVICE_NAME },
@@ -285,7 +313,7 @@ const logger = winston.createLogger({
     normalizeMessage(),
     redactSensitive(),       // scrub tokens, keys, emails, phones
   ),
-  transports: [buildConsoleTransport()],
+  transports,
 });
 
 logger.exitOnError = false;

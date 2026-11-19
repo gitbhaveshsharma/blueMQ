@@ -7,38 +7,17 @@
  * │  MUST be the very first require() in every entry point.                │
  * │  In src/index.js:  require('./telemetry')  — line 1, before dotenv.    │
  * └─────────────────────────────────────────────────────────────────────────┘
- *
- * What this file does:
- *   1. Loads dotenv (idempotent — safe even if index.js also calls it)
- *   2. Reads otel.config.js (pure config, no SDK)
- *   3. If TELEMETRY_ENABLED=true, initialises the NodeSDK synchronously
- *      and registers instrumentations so they can patch libraries at load time
- *   4. Exports shutdownTelemetry() — called inside closeRedisAndExit()
- *
- * Design constraints (ARM VM, free-tier):
- *   - SDK init is wrapped in try/catch — any failure is logged to stderr and ignored
- *   - Telemetry never crashes or blocks the application
- *   - No SIGTERM/SIGINT handlers registered here (would race with index.js handlers)
- *   - Batch processors use conservative limits (OTEL_BSP_* env vars)
- *
- * Orphan span prevention:
- *   - IORedisInstrumentation: requireParentSpan=true
- *     Prevents 51,840+ orphan spans/day from BullMQ, pub/sub, and polling workers
- *   - PgInstrumentation: requireParentSpan=true
- *     Prevents orphan spans from quota-stale (5 min), webhook-delivery (10 sec),
- *     scheduled-notification poll ticks, and pool keepalives
- *
- * Health/ready exclusion:
- *   - HttpInstrumentation ignores GET /health, /ready, /health/* paths
- *
- * Phase 2 trace propagation hook points (not implemented yet):
- *   - src/queues/enqueue.js   → inject traceparent into job.data before queue.add()
- *   - src/workers/base.worker.js → extract traceparent from job.data, start child span
- *   - src/workers/webhook-delivery.worker.js deliverOne() → span per HTTP attempt
- *   - src/ws/index.js wss.on("connection") → ws.connections.active UpDownCounter
  */
 
 require("dotenv").config({ quiet: true });
+
+// Enable OpenTelemetry diagnostics
+const { diag, DiagConsoleLogger, DiagLogLevel } = require('@opentelemetry/api');
+if (process.env.OTEL_LOG_LEVEL === 'debug') {
+  diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
+} else {
+  diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
+}
 
 const otelConfig = require("./config/otel.config");
 
@@ -120,22 +99,23 @@ function initSdk() {
       defaultResource,
     } = require("@opentelemetry/resources");
     const {
-      BatchSpanProcessor,
-      ConsoleSpanExporter,
       ParentBasedSampler,
       TraceIdRatioBasedSampler,
       AlwaysOnSampler,
       AlwaysOffSampler,
     } = require("@opentelemetry/sdk-trace");
     const {
+      ConsoleSpanExporter,
+    } = require("@opentelemetry/sdk-trace");
+    const {
       OTLPTraceExporter,
-    } = require("@opentelemetry/exporter-trace-otlp-proto");
+    } = require("@opentelemetry/exporter-trace-otlp-http");
     const {
       OTLPMetricExporter,
-    } = require("@opentelemetry/exporter-metrics-otlp-proto");
+    } = require("@opentelemetry/exporter-metrics-otlp-http");
     const {
       OTLPLogExporter,
-    } = require("@opentelemetry/exporter-logs-otlp-proto");
+    } = require("@opentelemetry/exporter-logs-otlp-http");
     const {
       PeriodicExportingMetricReader,
       ConsoleMetricExporter,
@@ -159,6 +139,9 @@ function initSdk() {
     const {
       WinstonInstrumentation,
     } = require("@opentelemetry/instrumentation-winston");
+    const {
+      RuntimeNodeInstrumentation,
+    } = require("@opentelemetry/instrumentation-runtime-node");
 
     const useConsole = otelConfig.useConsoleExporters;
     const otlpOpts = { headers: parseOtlpHeaders(otelConfig.otlpHeaders) };
@@ -174,19 +157,20 @@ function initSdk() {
     );
 
     // ── Trace exporter + batch span processor ─────────────────────────────
+    // Note: HTTP exporter requires full path including /v1/traces
     const traceExporter = useConsole
       ? new ConsoleSpanExporter()
       : new OTLPTraceExporter({
           url: `${otelConfig.otlpEndpoint}/v1/traces`,
           ...otlpOpts,
         });
-
-    const spanProcessor = new BatchSpanProcessor(traceExporter, {
-      scheduledDelayMillis: otelConfig.batch.scheduledDelayMillis,
-      exportTimeoutMillis: otelConfig.batch.exportTimeoutMillis,
-      maxExportBatchSize: otelConfig.batch.maxExportBatchSize,
-      maxQueueSize: otelConfig.batch.maxQueueSize,
-    });
+    
+    // Log exporter configuration for debugging
+    if (!useConsole) {
+      process.stderr.write(
+        `[telemetry] Trace exporter: HTTP to ${otelConfig.otlpEndpoint}/v1/traces\n`,
+      );
+    }
 
     // ── Metrics reader ────────────────────────────────────────────────────
     const metricExporter = useConsole
@@ -266,20 +250,74 @@ function initSdk() {
 
       // Winston: adds trace_id/span_id to log records and ships them to
       // the OTel logs pipeline (LoggerProvider set by NodeSDK above)
-      new WinstonInstrumentation({ enabled: true }),
+      new WinstonInstrumentation({
+        enabled: true,
+        // Disable injection since we manually inject in logger/index.js
+        disableLogSending: false,
+        disableLogCorrelation: false,
+      }),
+
+      // RuntimeNode: collects Node.js runtime metrics (event loop, GC)
+      new RuntimeNodeInstrumentation({
+        enabled: true,
+        // Measure event loop utilization every 5 seconds
+        eventLoopUtilizationMeasurementInterval: 5000,
+      }),
     ];
 
     // ── NodeSDK (v2 API) ──────────────────────────────────────────────────
     _sdk = new NodeSDK({
       resource,
       sampler,
-      spanProcessors: [spanProcessor],
-      metricReaders: [metricReader],        // v2: plural array
-      logRecordProcessors: [logProcessor],  // v2: plural array
+      traceExporter,  // Pass exporter directly, let SDK create processor
+      metricReader,   // Pass reader directly (SDK expects singular)
+      logRecordProcessor: logProcessor,  // v2: singular, not array
       instrumentations,
     });
+    
+    // Log exporter configuration for debugging
+    if (!useConsole) {
+      process.stderr.write(
+        `[telemetry] Metric exporter: HTTP to ${otelConfig.otlpEndpoint}/v1/metrics (export interval: ${otelConfig.metrics.exportIntervalMillis}ms)\n`,
+      );
+      process.stderr.write(
+        `[telemetry] Log exporter: HTTP to ${otelConfig.otlpEndpoint}/v1/logs (batch delay: ${otelConfig.batch.scheduledDelayMillis}ms)\n`,
+      );
+    }
 
     _sdk.start();
+
+    // ── Host Metrics (CPU, Memory, Network, Disk) ─────────────────────────
+    // Collect system-level metrics: CPU usage, memory, network I/O, disk I/O
+    try {
+      const hostMetricsModule = require('@opentelemetry/instrumentation-host-metrics');
+      const HostMetrics = hostMetricsModule.HostMetrics || hostMetricsModule.default;
+      
+      const hostMetrics = new HostMetrics({
+        name: 'blueMQ-host-metrics',
+        meterProvider: _sdk.meterProvider,
+      });
+      
+      hostMetrics.start();
+      
+      process.stderr.write('[telemetry] Host metrics collection started\n');
+    } catch (err) {
+      process.stderr.write(
+        `[telemetry] Host metrics initialization failed (non-fatal): ${err.message}\n`
+      );
+    }
+
+    // ── Custom System Metrics (Swap) ──────────────────────────────────────
+    // Collect swap/page file metrics (Linux, Windows)
+    // NOTE: This is a temporary solution. For production, use Grafana Alloy
+    // or node_exporter for better system monitoring.
+    try {
+      require('./metrics/system');
+    } catch (err) {
+      process.stderr.write(
+        `[telemetry] Custom system metrics initialization failed (non-fatal): ${err.message}\n`
+      );
+    }
 
     process.stderr.write(
       `[telemetry] Started ` +

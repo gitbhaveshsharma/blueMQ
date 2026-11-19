@@ -66,7 +66,7 @@ const ErrorType = {
 
 function classifyError(error) {
   const msg = (error.message ?? "").toLowerCase();
-  const code = (error.code ?? "").toLowerCase();
+  const code = String(error.code ?? "").toLowerCase();
 
   if (error.name === "PoolClosedError" || msg.includes("pool after calling end"))
     return ErrorType.POOL_CLOSED;
