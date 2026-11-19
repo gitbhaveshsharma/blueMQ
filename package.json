@@ -36,7 +36,6 @@
     "@opentelemetry/exporter-metrics-otlp-proto": "^0.300.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.301.2",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.300.0",
-    "@opentelemetry/host-metrics": "^0.40.0",
     "@opentelemetry/instrumentation-express": "^0.72.0",
     "@opentelemetry/instrumentation-host-metrics": "^0.8.0",
     "@opentelemetry/instrumentation-http": "^0.300.0",
