@@ -290,8 +290,7 @@ function initSdk() {
     // ── Host Metrics (CPU, Memory, Network, Disk) ─────────────────────────
     // Collect system-level metrics: CPU usage, memory, network I/O, disk I/O
     try {
-      const hostMetricsModule = require('@opentelemetry/instrumentation-host-metrics');
-      const HostMetrics = hostMetricsModule.HostMetrics || hostMetricsModule.default;
+      const { HostMetrics } = require('@opentelemetry/instrumentation-host-metrics');
       
       const hostMetrics = new HostMetrics({
         name: 'blueMQ-host-metrics',
