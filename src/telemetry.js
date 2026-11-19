@@ -142,6 +142,9 @@ function initSdk() {
     const {
       RuntimeNodeInstrumentation,
     } = require("@opentelemetry/instrumentation-runtime-node");
+    const {
+      HostMetricsInstrumentation,
+    } = require("@opentelemetry/instrumentation-host-metrics");
 
     const useConsole = otelConfig.useConsoleExporters;
     const otlpOpts = { headers: parseOtlpHeaders(otelConfig.otlpHeaders) };
@@ -263,6 +266,11 @@ function initSdk() {
         // Measure event loop utilization every 5 seconds
         eventLoopUtilizationMeasurementInterval: 5000,
       }),
+
+      // HostMetrics: collects system-level metrics (CPU, memory, network)
+      new HostMetricsInstrumentation({
+        enabled: true,
+      }),
     ];
 
     // ── NodeSDK (v2 API) ──────────────────────────────────────────────────
@@ -286,25 +294,6 @@ function initSdk() {
     }
 
     _sdk.start();
-
-    // ── Host Metrics (CPU, Memory, Network, Disk) ─────────────────────────
-    // Collect system-level metrics: CPU usage, memory, network I/O, disk I/O
-    try {
-      const { HostMetrics } = require('@opentelemetry/instrumentation-host-metrics');
-      
-      const hostMetrics = new HostMetrics({
-        name: 'blueMQ-host-metrics',
-        meterProvider: _sdk.meterProvider,
-      });
-      
-      hostMetrics.start();
-      
-      process.stderr.write('[telemetry] Host metrics collection started\n');
-    } catch (err) {
-      process.stderr.write(
-        `[telemetry] Host metrics initialization failed (non-fatal): ${err.message}\n`
-      );
-    }
 
     // ── Custom System Metrics (Swap) ──────────────────────────────────────
     // Collect swap/page file metrics (Linux, Windows)
